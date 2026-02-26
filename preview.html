@@ -1,0 +1,742 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>StreetEasy Finder — Setup</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    /* Subtle animated gradient header */
+    .header-gradient {
+      background: linear-gradient(135deg, #1e3a5f 0%, #2c5aa0 50%, #1e3a5f 100%);
+    }
+    /* Status badge pulse animation */
+    @keyframes pulse-green {
+      0%, 100% { box-shadow: 0 0 0 0 rgba(34, 197, 94, 0.4); }
+      50%       { box-shadow: 0 0 0 6px rgba(34, 197, 94, 0); }
+    }
+    @keyframes pulse-red {
+      0%, 100% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.4); }
+      50%       { box-shadow: 0 0 0 6px rgba(239, 68, 68, 0); }
+    }
+    .pulse-green { animation: pulse-green 2s infinite; }
+    .pulse-red   { animation: pulse-red 2s infinite; }
+
+    /* URL preview syntax highlight */
+    .url-base   { color: #6366f1; }
+    .url-filter { color: #10b981; }
+    .url-sep    { color: #9ca3af; }
+
+    /* Smooth transitions */
+    input, select { transition: border-color 0.15s, box-shadow 0.15s; }
+    input:focus, select:focus {
+      outline: none;
+      border-color: #2c5aa0;
+      box-shadow: 0 0 0 3px rgba(44, 90, 160, 0.15);
+    }
+
+    /* Toast notification */
+    #toast {
+      transition: opacity 0.3s, transform 0.3s;
+    }
+    #toast.hidden {
+      opacity: 0;
+      transform: translateY(10px);
+      pointer-events: none;
+    }
+  </style>
+</head>
+<body class="bg-slate-50 min-h-screen font-sans">
+
+  <!-- ===== HEADER ===== -->
+  <header class="header-gradient text-white shadow-lg">
+    <div class="max-w-4xl mx-auto px-6 py-5 flex items-center justify-between">
+      <div class="flex items-center gap-3">
+        <span class="text-3xl">🏠</span>
+        <div>
+          <h1 class="text-xl font-bold tracking-tight">StreetEasy Finder</h1>
+          <p class="text-blue-200 text-xs">Apartment alert configuration</p>
+        </div>
+      </div>
+
+      <!-- Docker status badge -->
+      <div id="docker-badge"
+           class="flex items-center gap-2 bg-white/10 backdrop-blur rounded-full px-4 py-2 text-sm font-medium cursor-pointer hover:bg-white/20 transition"
+           onclick="refreshDockerStatus()" title="Click to refresh">
+        <span id="docker-dot" class="w-2.5 h-2.5 rounded-full bg-gray-400 inline-block"></span>
+        <span id="docker-label">Checking tracker…</span>
+        <svg id="docker-refresh" class="w-3.5 h-3.5 text-blue-200 ml-1" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round"
+                d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+        </svg>
+      </div>
+    </div>
+  </header>
+
+  <!-- ===== MAIN CONTENT ===== -->
+  <main class="max-w-4xl mx-auto px-6 py-8 space-y-6">
+
+    <!-- Docker connectivity card -->
+    <div id="docker-card" class="rounded-xl border border-slate-200 bg-white shadow-sm overflow-hidden">
+      <div class="px-6 py-4 bg-slate-50 border-b border-slate-200 flex items-center gap-2">
+        <svg class="w-4 h-4 text-slate-500" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round"
+                d="M5 12h14M12 5l7 7-7 7" />
+        </svg>
+        <span class="font-semibold text-slate-700 text-sm uppercase tracking-wide">Tracker Container</span>
+      </div>
+      <div class="px-6 py-5 flex items-center justify-between">
+        <div class="flex items-center gap-3">
+          <span id="status-dot-lg"
+                class="w-4 h-4 rounded-full bg-gray-300 inline-block flex-shrink-0"></span>
+          <div>
+            <p id="status-title" class="font-semibold text-slate-800">Checking…</p>
+            <p id="status-detail" class="text-sm text-slate-500">Querying Docker socket</p>
+          </div>
+        </div>
+        <div class="text-right text-xs text-slate-400">
+          <p>Container: <code class="text-slate-600">apartment-tracker</code></p>
+          <p id="status-time" class="mt-0.5">—</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===== SETUP FORM ===== -->
+    <form id="config-form" class="space-y-6" onsubmit="saveConfig(event)">
+
+      <!-- 1. Email Configuration -->
+      <div class="rounded-xl border border-slate-200 bg-white shadow-sm overflow-hidden">
+        <div class="px-6 py-4 bg-slate-50 border-b border-slate-200 flex items-center gap-2">
+          <svg class="w-4 h-4 text-slate-500" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round"
+                  d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
+          </svg>
+          <span class="font-semibold text-slate-700 text-sm uppercase tracking-wide">Email Configuration</span>
+        </div>
+        <div class="px-6 py-5 grid grid-cols-1 md:grid-cols-2 gap-5">
+
+          <div class="md:col-span-2">
+            <label class="block text-sm font-medium text-slate-700 mb-1">
+              Sender Email
+              <span class="text-slate-400 font-normal ml-1">(Gmail recommended)</span>
+            </label>
+            <input type="email" id="email_address" name="email_address"
+                   placeholder="you@gmail.com"
+                   value=""
+                   oninput="syncToEmail()"
+                   class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm bg-white" />
+            <p class="text-xs text-slate-400 mt-1">Use a Gmail address with an
+              <a href="https://myaccount.google.com/apppasswords" target="_blank"
+                 class="text-blue-600 underline">App Password</a> (requires 2FA).
+            </p>
+          </div>
+
+          <div>
+            <label class="block text-sm font-medium text-slate-700 mb-1">App Password</label>
+            <input type="password" id="email_password" name="email_password"
+                   placeholder="16-character app password"
+                   value=""
+                   class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm bg-white" />
+            <p class="text-xs text-slate-400 mt-1">Never your real password — generate one in Google settings.</p>
+          </div>
+
+          <div>
+            <label class="block text-sm font-medium text-slate-700 mb-1">
+              Recipient Email
+              <span class="text-slate-400 font-normal ml-1">(where alerts go)</span>
+            </label>
+            <input type="email" id="to_email" name="to_email"
+                   placeholder="recipient@example.com"
+                   value=""
+                   class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm bg-white" />
+          </div>
+
+        </div>
+      </div>
+
+      <!-- 2. Search Filters -->
+      <div class="rounded-xl border border-slate-200 bg-white shadow-sm overflow-hidden">
+        <div class="px-6 py-4 bg-slate-50 border-b border-slate-200 flex items-center gap-2">
+          <svg class="w-4 h-4 text-slate-500" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round"
+                  d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2a1 1 0 01-.293.707L13 13.414V19a1 1 0 01-.553.894l-4 2A1 1 0 017 21v-7.586L3.293 6.707A1 1 0 013 6V4z" />
+          </svg>
+          <span class="font-semibold text-slate-700 text-sm uppercase tracking-wide">Search Filters</span>
+        </div>
+        <div class="px-6 py-5 grid grid-cols-1 md:grid-cols-2 gap-5">
+
+          <!-- Neighborhood / Location -->
+          <div class="md:col-span-2">
+            <label class="block text-sm font-medium text-slate-700 mb-1">Neighborhood / Location</label>
+            <select id="location" name="location"
+                    onchange="rebuildUrl()"
+                    class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm bg-white">
+              
+                <optgroup label="All NYC">
+                  
+                    <option value="nyc"
+                      selected>
+                      All of NYC
+                    </option>
+                  
+                </optgroup>
+              
+                <optgroup label="Manhattan">
+                  
+                    <option value="manhattan"
+                      >
+                      All Manhattan
+                    </option>
+                  
+                    <option value="upper-west-side"
+                      >
+                      Upper West Side
+                    </option>
+                  
+                    <option value="upper-east-side"
+                      >
+                      Upper East Side
+                    </option>
+                  
+                    <option value="midtown"
+                      >
+                      Midtown
+                    </option>
+                  
+                    <option value="chelsea"
+                      >
+                      Chelsea
+                    </option>
+                  
+                    <option value="hells-kitchen"
+                      >
+                      Hell&#39;s Kitchen
+                    </option>
+                  
+                    <option value="gramercy"
+                      >
+                      Gramercy / Murray Hill
+                    </option>
+                  
+                    <option value="east-village"
+                      >
+                      East Village
+                    </option>
+                  
+                    <option value="west-village"
+                      >
+                      West Village
+                    </option>
+                  
+                    <option value="lower-east-side"
+                      >
+                      Lower East Side
+                    </option>
+                  
+                    <option value="soho"
+                      >
+                      SoHo
+                    </option>
+                  
+                    <option value="tribeca"
+                      >
+                      Tribeca
+                    </option>
+                  
+                    <option value="financial-district"
+                      >
+                      Financial District
+                    </option>
+                  
+                    <option value="harlem"
+                      >
+                      Harlem
+                    </option>
+                  
+                    <option value="washington-heights"
+                      >
+                      Washington Heights
+                    </option>
+                  
+                </optgroup>
+              
+                <optgroup label="Brooklyn">
+                  
+                    <option value="brooklyn"
+                      >
+                      All Brooklyn
+                    </option>
+                  
+                    <option value="brooklyn-heights"
+                      >
+                      Brooklyn Heights
+                    </option>
+                  
+                    <option value="williamsburg"
+                      >
+                      Williamsburg
+                    </option>
+                  
+                    <option value="park-slope"
+                      >
+                      Park Slope
+                    </option>
+                  
+                    <option value="bushwick"
+                      >
+                      Bushwick
+                    </option>
+                  
+                    <option value="dumbo"
+                      >
+                      DUMBO
+                    </option>
+                  
+                    <option value="crown-heights"
+                      >
+                      Crown Heights
+                    </option>
+                  
+                    <option value="bedford-stuyvesant"
+                      >
+                      Bed-Stuy
+                    </option>
+                  
+                    <option value="carroll-gardens"
+                      >
+                      Carroll Gardens
+                    </option>
+                  
+                    <option value="cobble-hill"
+                      >
+                      Cobble Hill
+                    </option>
+                  
+                    <option value="fort-greene"
+                      >
+                      Fort Greene
+                    </option>
+                  
+                    <option value="sunset-park"
+                      >
+                      Sunset Park
+                    </option>
+                  
+                    <option value="bay-ridge"
+                      >
+                      Bay Ridge
+                    </option>
+                  
+                </optgroup>
+              
+                <optgroup label="Queens">
+                  
+                    <option value="queens"
+                      >
+                      All Queens
+                    </option>
+                  
+                    <option value="long-island-city"
+                      >
+                      Long Island City
+                    </option>
+                  
+                    <option value="astoria"
+                      >
+                      Astoria
+                    </option>
+                  
+                    <option value="jackson-heights"
+                      >
+                      Jackson Heights
+                    </option>
+                  
+                    <option value="flushing"
+                      >
+                      Flushing
+                    </option>
+                  
+                    <option value="forest-hills"
+                      >
+                      Forest Hills
+                    </option>
+                  
+                    <option value="sunnyside"
+                      >
+                      Sunnyside
+                    </option>
+                  
+                </optgroup>
+              
+                <optgroup label="Bronx">
+                  
+                    <option value="bronx"
+                      >
+                      All Bronx
+                    </option>
+                  
+                    <option value="riverdale"
+                      >
+                      Riverdale
+                    </option>
+                  
+                    <option value="fordham"
+                      >
+                      Fordham
+                    </option>
+                  
+                </optgroup>
+              
+            </select>
+          </div>
+
+          <!-- Price Range -->
+          <div>
+            <label class="block text-sm font-medium text-slate-700 mb-1">Min Price <span class="text-slate-400 font-normal">($/mo, optional)</span></label>
+            <div class="relative">
+              <span class="absolute left-3 top-2 text-slate-400 text-sm">$</span>
+              <input type="number" id="min_price" name="min_price"
+                     placeholder="0"
+                     min="0" step="100"
+                     oninput="rebuildUrl()"
+                     class="w-full rounded-lg border border-slate-300 pl-7 pr-3 py-2 text-sm bg-white" />
+            </div>
+          </div>
+
+          <div>
+            <label class="block text-sm font-medium text-slate-700 mb-1">Max Price <span class="text-slate-400 font-normal">($/mo, optional)</span></label>
+            <div class="relative">
+              <span class="absolute left-3 top-2 text-slate-400 text-sm">$</span>
+              <input type="number" id="max_price" name="max_price"
+                     placeholder="5000"
+                     min="0" step="100"
+                     oninput="rebuildUrl()"
+                     class="w-full rounded-lg border border-slate-300 pl-7 pr-3 py-2 text-sm bg-white" />
+            </div>
+          </div>
+
+          <!-- Bedrooms -->
+          <div>
+            <label class="block text-sm font-medium text-slate-700 mb-1">Bedrooms</label>
+            <select id="beds" name="beds"
+                    onchange="rebuildUrl()"
+                    class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm bg-white">
+              <option value="any">Any</option>
+              <option value="0">Studio</option>
+              <option value="lte_1">Up to 1 bed</option>
+              <option value="1">1 bed</option>
+              <option value="lte_2">Up to 2 beds</option>
+              <option value="2">2 beds</option>
+              <option value="lte_3">Up to 3 beds</option>
+              <option value="3">3 beds</option>
+              <option value="4">4+ beds</option>
+            </select>
+          </div>
+
+          <!-- Check Interval -->
+          <div>
+            <label class="block text-sm font-medium text-slate-700 mb-1">
+              Check Interval
+              <span class="text-slate-400 font-normal">(minutes)</span>
+            </label>
+            <input type="number" id="time_interval" name="time_interval"
+                   value="5"
+                   min="1" max="60" step="1"
+                   class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm bg-white" />
+          </div>
+
+        </div>
+      </div>
+
+      <!-- 3. Live URL Preview -->
+      <div class="rounded-xl border border-indigo-200 bg-indigo-50 shadow-sm overflow-hidden">
+        <div class="px-6 py-4 bg-indigo-100 border-b border-indigo-200 flex items-center justify-between">
+          <div class="flex items-center gap-2">
+            <svg class="w-4 h-4 text-indigo-500" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round"
+                    d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" />
+            </svg>
+            <span class="font-semibold text-indigo-700 text-sm uppercase tracking-wide">Live StreetEasy URL Preview</span>
+          </div>
+          <button type="button" onclick="copyUrl()"
+                  class="text-xs text-indigo-600 hover:text-indigo-800 font-medium flex items-center gap-1 transition">
+            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round"
+                    d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
+            </svg>
+            Copy
+          </button>
+        </div>
+        <div class="px-6 py-4">
+          <p id="url-preview"
+             class="font-mono text-sm break-all text-slate-700 bg-white rounded-lg px-4 py-3 border border-indigo-200 min-h-[44px]">
+            https://streeteasy.com/for-rent/nyc
+          </p>
+          <p class="text-xs text-indigo-600 mt-2">
+            This URL updates live as you change filters above. It will be saved to your <code>.env</code> as <code>SE_URL</code>.
+          </p>
+        </div>
+      </div>
+
+      <!-- 4. Action Buttons -->
+      <div class="flex flex-col sm:flex-row gap-3">
+        <button type="submit"
+                class="flex-1 bg-blue-700 hover:bg-blue-800 text-white font-semibold rounded-xl px-6 py-3 text-sm transition shadow-sm flex items-center justify-center gap-2">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7" />
+          </svg>
+          Save Configuration
+        </button>
+
+        <a id="open-url-btn" href="#" target="_blank"
+           class="flex-1 bg-white hover:bg-slate-50 text-slate-700 font-semibold rounded-xl px-6 py-3 text-sm transition shadow-sm border border-slate-300 flex items-center justify-center gap-2">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round"
+                  d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+          </svg>
+          Preview on StreetEasy
+        </a>
+      </div>
+
+    </form>
+
+    <!-- Help note -->
+    <div class="rounded-xl border border-amber-200 bg-amber-50 px-5 py-4 text-sm text-amber-800">
+      <strong>Getting started:</strong> Fill in your email settings and search filters, then click
+      <em>Save Configuration</em>. The tracker container will pick up the new settings automatically.
+      Restart the container to apply changes: <code class="bg-amber-100 rounded px-1 py-0.5">./run.sh restart</code>
+    </div>
+
+  </main>
+
+  <!-- Toast notification -->
+  <div id="toast"
+       class="fixed bottom-6 right-6 bg-slate-800 text-white text-sm font-medium rounded-xl shadow-xl px-5 py-3 flex items-center gap-2 hidden">
+    <span id="toast-icon">✓</span>
+    <span id="toast-msg">Saved!</span>
+  </div>
+
+  <!-- ===== JAVASCRIPT ===== -->
+  <script>
+    // ----------------------------------------------------------------
+    // URL builder — mirrors the Python logic in app.py
+    // ----------------------------------------------------------------
+    function buildUrl() {
+      const location  = document.getElementById('location').value  || 'nyc';
+      const minPrice  = document.getElementById('min_price').value.replace(/,/g,'').trim();
+      const maxPrice  = document.getElementById('max_price').value.replace(/,/g,'').trim();
+      const beds      = document.getElementById('beds').value;
+
+      const filters = [];
+
+      if (minPrice && maxPrice) {
+        filters.push(`price:${minPrice}-${maxPrice}`);
+      } else if (maxPrice) {
+        filters.push(`price:-${maxPrice}`);
+      } else if (minPrice) {
+        filters.push(`price:${minPrice}-`);
+      }
+
+      if (beds && beds !== 'any') {
+        if (beds === '0') {
+          filters.push('beds:0');
+        } else if (beds.startsWith('lte_')) {
+          const n = beds.replace('lte_', '');
+          filters.push(`beds%3C=${n}`);          // URL-encoded <=
+        } else {
+          filters.push(`beds:${beds}`);
+        }
+      }
+
+      let url = `https://streeteasy.com/for-rent/${location}`;
+      if (filters.length) url += '/' + filters.join('|');
+      return url;
+    }
+
+    function rebuildUrl() {
+      const url = buildUrl();
+      document.getElementById('url-preview').textContent = url;
+      document.getElementById('open-url-btn').href = url;
+    }
+
+    // ----------------------------------------------------------------
+    // Auto-fill "To Email" from "Sender Email" if blank
+    // ----------------------------------------------------------------
+    function syncToEmail() {
+      const toField = document.getElementById('to_email');
+      if (!toField.value) {
+        toField.placeholder = document.getElementById('email_address').value || 'recipient@example.com';
+      }
+    }
+
+    // ----------------------------------------------------------------
+    // Copy URL to clipboard
+    // ----------------------------------------------------------------
+    async function copyUrl() {
+      const url = document.getElementById('url-preview').textContent;
+      try {
+        await navigator.clipboard.writeText(url);
+        showToast('✓', 'URL copied to clipboard!');
+      } catch {
+        showToast('⚠', 'Could not copy — select and copy manually.');
+      }
+    }
+
+    // ----------------------------------------------------------------
+    // Save configuration via API
+    // ----------------------------------------------------------------
+    async function saveConfig(e) {
+      e.preventDefault();
+      const payload = {
+        location:      document.getElementById('location').value,
+        min_price:     document.getElementById('min_price').value,
+        max_price:     document.getElementById('max_price').value,
+        beds:          document.getElementById('beds').value,
+        email_address: document.getElementById('email_address').value,
+        email_password:document.getElementById('email_password').value,
+        to_email:      document.getElementById('to_email').value,
+        time_interval: document.getElementById('time_interval').value,
+      };
+
+      try {
+        const res = await fetch('/api/save-config', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+        const data = await res.json();
+        if (data.success) {
+          showToast('✓', 'Configuration saved! Restart the tracker to apply.');
+        } else {
+          showToast('✗', 'Save failed. Check server logs.');
+        }
+      } catch (err) {
+        showToast('✗', 'Network error: ' + err.message);
+      }
+    }
+
+    // ----------------------------------------------------------------
+    // Docker status polling
+    // ----------------------------------------------------------------
+    async function refreshDockerStatus() {
+      setDockerUI('checking');
+      try {
+        const res  = await fetch('/api/docker-status');
+        const data = await res.json();
+        setDockerUI(data.status, data.details);
+      } catch {
+        setDockerUI('error', 'Could not reach server');
+      }
+    }
+
+    function setDockerUI(status, details = '') {
+      const dot      = document.getElementById('docker-dot');
+      const label    = document.getElementById('docker-label');
+      const dotLg    = document.getElementById('status-dot-lg');
+      const title    = document.getElementById('status-title');
+      const detail   = document.getElementById('status-detail');
+      const timeEl   = document.getElementById('status-time');
+
+      const now = new Date().toLocaleTimeString();
+      timeEl.textContent = 'Last checked: ' + now;
+
+      const cfg = {
+        running:     { color: 'bg-green-400',  pulse: 'pulse-green', label: 'Tracker running',   title: 'Container Running',   detail: details || 'apartment-tracker is active' },
+        stopped:     { color: 'bg-red-400',    pulse: 'pulse-red',   label: 'Tracker stopped',   title: 'Container Stopped',   detail: details || 'Start with: ./run.sh run' },
+        checking:    { color: 'bg-yellow-400', pulse: '',             label: 'Checking…',         title: 'Checking status…',    detail: 'Querying Docker' },
+        unavailable: { color: 'bg-gray-400',   pulse: '',             label: 'Docker unavailable',title: 'Docker Unavailable',  detail: details || 'Docker CLI not found on host' },
+        error:       { color: 'bg-orange-400', pulse: 'pulse-red',   label: 'Status error',      title: 'Check Error',         detail: details || 'Unexpected error' },
+      }[status] || { color: 'bg-gray-400', pulse: '', label: status, title: status, detail: details };
+
+      // Header badge
+      dot.className   = `w-2.5 h-2.5 rounded-full inline-block ${cfg.color} ${cfg.pulse}`;
+      label.textContent = cfg.label;
+
+      // Card
+      dotLg.className = `w-4 h-4 rounded-full inline-block flex-shrink-0 ${cfg.color} ${cfg.pulse}`;
+      title.textContent  = cfg.title;
+      detail.textContent = cfg.detail;
+    }
+
+    // ----------------------------------------------------------------
+    // Toast helper
+    // ----------------------------------------------------------------
+    let toastTimer;
+    function showToast(icon, msg) {
+      const toast = document.getElementById('toast');
+      document.getElementById('toast-icon').textContent = icon;
+      document.getElementById('toast-msg').textContent  = msg;
+      toast.classList.remove('hidden');
+      clearTimeout(toastTimer);
+      toastTimer = setTimeout(() => toast.classList.add('hidden'), 4000);
+    }
+
+    // ----------------------------------------------------------------
+    // Pre-fill URL from saved SE_URL in .env
+    // ----------------------------------------------------------------
+    function prePopulateFromEnv() {
+      const savedUrl = "https://streeteasy.com/for-rent/nyc";
+      if (!savedUrl) return;
+
+      // Try to parse the slug from the saved URL
+      // e.g. https://streeteasy.com/for-rent/upper-west-side/price:-3000|beds:1
+      try {
+        const withoutBase = savedUrl.replace('https://streeteasy.com/for-rent/', '');
+        const parts = withoutBase.split('/');
+        const slug = parts[0];
+
+        // Set location dropdown
+        const locSel = document.getElementById('location');
+        for (const opt of locSel.options) {
+          if (opt.value === slug) { opt.selected = true; break; }
+        }
+
+        // Parse filters
+        if (parts[1]) {
+          const filters = parts[1].split('|');
+          for (const f of filters) {
+            if (f.startsWith('price:')) {
+              const priceStr = f.replace('price:', '');
+              if (priceStr.startsWith('-')) {
+                document.getElementById('max_price').value = priceStr.slice(1);
+              } else if (priceStr.endsWith('-')) {
+                document.getElementById('min_price').value = priceStr.slice(0, -1);
+              } else if (priceStr.includes('-')) {
+                const [mn, mx] = priceStr.split('-');
+                document.getElementById('min_price').value = mn;
+                document.getElementById('max_price').value = mx;
+              }
+            } else if (f.startsWith('beds:')) {
+              const n = f.replace('beds:', '');
+              const bedSel = document.getElementById('beds');
+              for (const opt of bedSel.options) {
+                if (opt.value === n) { opt.selected = true; break; }
+              }
+            } else if (f.includes('%3C=') || f.includes('<=')) {
+              const n = f.replace(/beds(%3C=|<=)/, '');
+              const bedSel = document.getElementById('beds');
+              for (const opt of bedSel.options) {
+                if (opt.value === 'lte_' + n) { opt.selected = true; break; }
+              }
+            }
+          }
+        }
+      } catch (err) {
+        console.warn('Could not pre-populate from saved URL:', err);
+      }
+    }
+
+    // ----------------------------------------------------------------
+    // Init
+    // ----------------------------------------------------------------
+    document.addEventListener('DOMContentLoaded', () => {
+      prePopulateFromEnv();
+      rebuildUrl();
+      refreshDockerStatus();
+      // Auto-refresh Docker status every 15 s
+      setInterval(refreshDockerStatus, 15000);
+    });
+  </script>
+
+</body>
+</html>
