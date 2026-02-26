@@ -1,6 +1,7 @@
 version: '3.8'
 
 services:
+  # Apartment tracker — scrapes StreetEasy and sends email alerts
   apartment-tracker:
     build: .
     container_name: apartment-tracker
@@ -9,4 +10,22 @@ services:
       - ./data:/app/data
       - ./logs:/app/logs
     env_file:
-      - .env 
+      - .env
+
+  # Web UI — lets you configure filters, email, and monitor the tracker
+  web:
+    build: .
+    container_name: streeteasy-web
+    restart: unless-stopped
+    command: python app.py
+    ports:
+      - "5000:5000"
+    volumes:
+      - ./data:/app/data
+      - ./logs:/app/logs
+      - ./.env:/app/.env          # shared .env so UI can read/write config
+      - /var/run/docker.sock:/var/run/docker.sock   # Docker socket for status checks
+    env_file:
+      - .env
+    depends_on:
+      - apartment-tracker
