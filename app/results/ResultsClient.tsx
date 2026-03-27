@@ -1,86 +1,229 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
-import { useSearchParams, useRouter } from "next/navigation";
+import { useEffect, useState, useCallback, useRef, useMemo } from "react";
+import { useSearchParams } from "next/navigation";
 import Link from "next/link";
 import ApartmentCard from "@/components/ApartmentCard";
 import ApartmentCardSkeleton from "@/components/ApartmentCardSkeleton";
 import Navbar from "@/components/Navbar";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import type { Apartment } from "@/lib/db";
 
-interface SearchResult {
+type SortKey = "score" | "price_asc" | "price_desc" | "sqft";
+
+type ScrapePhase = "idle" | "initial" | "scraping" | "complete";
+
+interface Progress {
+  page: number;
+  totalPages: number;
+  count: number;
+}
+
+interface CompleteResult {
   apartments: Apartment[];
   total: number;
-  page: number;
-  pageSize: number;
-  totalPages: number;
   fromCache: boolean;
   stale?: boolean;
-  seTotal?: number | null;
-  pagesScraped?: number;
-  error?: string;
+  scrapedCount?: number;
 }
 
 export default function ResultsClient() {
   const searchParams = useSearchParams();
-  const router = useRouter();
-
   const neighborhood = searchParams.get("neighborhood") ?? "";
   const beds = searchParams.get("beds") ?? "";
   const baths = searchParams.get("baths") ?? "";
   const minPrice = searchParams.get("minPrice") ?? "";
   const maxPrice = searchParams.get("maxPrice") ?? "";
-  const page = parseInt(searchParams.get("page") ?? "1", 10);
 
-  const [result, setResult] = useState<SearchResult | null>(null);
-  const [loading, setLoading] = useState(true);
+  // Client-side page (after sort/filter)
+  const [clientPage, setClientPage] = useState(1);
+  const PAGE_SIZE = 20;
+
+  // Displayed apartments — replaced with first batch, then with final sorted set
+  const [apartments, setApartments] = useState<Apartment[]>([]);
+  const [phase, setPhase] = useState<ScrapePhase>("idle");
+
+  // Client-side sort/filter
+  const [sortBy, setSortBy] = useState<SortKey>("score");
+  const [minScore, setMinScore] = useState<number>(0);
+  const [bedsFilter, setBedsFilter] = useState<string>("any");
+
+  // Reset to page 1 whenever filters/sort change
+  useEffect(() => { setClientPage(1); }, [sortBy, minScore, bedsFilter]);
+  const [progress, setProgress] = useState<Progress | null>(null);
+  const [result, setResult] = useState<CompleteResult | null>(null);
   const [error, setError] = useState("");
 
+  // AbortController ref — cancels in-flight stream when deps change
+  const abortRef = useRef<AbortController | null>(null);
+
+  // All apartments after sort/filter (no pagination — used for counts + pagination math)
+  const filteredApartments = useMemo(() => {
+    let list = [...apartments];
+
+    // Filter: min score
+    if (minScore > 0) {
+      list = list.filter((a) => a.score !== null && a.score >= minScore);
+    }
+
+    // Filter: beds
+    if (bedsFilter !== "any") {
+      list = list.filter((a) => {
+        if (!a.bedrooms) return false;
+        const lower = a.bedrooms.toLowerCase();
+        if (bedsFilter === "studio") return lower.includes("studio");
+        if (bedsFilter === "4+") {
+          const n = parseInt(a.bedrooms);
+          return !isNaN(n) && n >= 4;
+        }
+        return lower.startsWith(bedsFilter);
+      });
+    }
+
+    // Sort
+    list.sort((a, b) => {
+      if (sortBy === "score") {
+        return (b.score ?? 0) - (a.score ?? 0);
+      }
+      if (sortBy === "price_asc") {
+        return (a.price_num ?? Infinity) - (b.price_num ?? Infinity);
+      }
+      if (sortBy === "price_desc") {
+        return (b.price_num ?? 0) - (a.price_num ?? 0);
+      }
+      if (sortBy === "sqft") {
+        return (b.sqft_num ?? 0) - (a.sqft_num ?? 0);
+      }
+      return 0;
+    });
+
+    return list;
+  }, [apartments, sortBy, minScore, bedsFilter]);
+
+  // Current page slice — this is what actually renders in the grid
+  const pagedApartments = useMemo(() => {
+    const start = (clientPage - 1) * PAGE_SIZE;
+    return filteredApartments.slice(start, start + PAGE_SIZE);
+  }, [filteredApartments, clientPage, PAGE_SIZE]);
+
+  const totalFilteredPages = Math.ceil(filteredApartments.length / PAGE_SIZE);
+
   const search = useCallback(async () => {
-    setLoading(true);
+    // Cancel any previous request
+    abortRef.current?.abort();
+    const controller = new AbortController();
+    abortRef.current = controller;
+
+    setPhase("idle");
+    setApartments([]);
+    setProgress(null);
+    setResult(null);
     setError("");
 
+    const body = JSON.stringify({
+      neighborhood,
+      beds: beds || undefined,
+      baths: baths || undefined,
+      minPrice: minPrice ? parseInt(minPrice) : undefined,
+      maxPrice: maxPrice ? parseInt(maxPrice) : undefined,
+    });
+
+    let res: Response;
     try {
-      const res = await fetch("/api/search", {
+      res = await fetch("/api/search", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          neighborhood,
-          beds: beds || undefined,
-          baths: baths || undefined,
-          minPrice: minPrice ? parseInt(minPrice) : undefined,
-          maxPrice: maxPrice ? parseInt(maxPrice) : undefined,
-          page,
-        }),
+        body,
+        signal: controller.signal,
       });
+    } catch (err) {
+      if ((err as Error).name === "AbortError") return;
+      setError("Network error. Please try again.");
+      setPhase("complete");
+      return;
+    }
 
+    const contentType = res.headers.get("content-type") ?? "";
+
+    // --- Cache hit: plain JSON response ---
+    if (contentType.includes("application/json")) {
       const data = await res.json();
-
       if (!res.ok) {
         setError(data.error ?? "Something went wrong.");
       } else {
+        setApartments(data.apartments);
         setResult(data);
       }
-    } catch {
-      setError("Network error. Please try again.");
-    } finally {
-      setLoading(false);
+      setPhase("complete");
+      return;
     }
-  }, [neighborhood, beds, baths, minPrice, maxPrice, page]);
+
+    // --- Live scrape: SSE stream ---
+    if (!res.body) {
+      setError("No response body.");
+      setPhase("complete");
+      return;
+    }
+
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+
+    const parseEvents = (chunk: string) => {
+      buffer += chunk;
+      const parts = buffer.split("\n\n");
+      buffer = parts.pop() ?? "";
+      return parts
+        .map((p) => p.replace(/^data: /, "").trim())
+        .filter(Boolean)
+        .map((s) => { try { return JSON.parse(s); } catch { return null; } })
+        .filter(Boolean);
+    };
+
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        const events = parseEvents(decoder.decode(value, { stream: true }));
+
+        for (const event of events) {
+          if (event.type === "initial") {
+            // First page results — show immediately, reveal progress bar
+            setApartments(event.apartments);
+            setProgress({ page: 1, totalPages: event.totalPages, count: event.apartments.length });
+            setPhase("scraping");
+          } else if (event.type === "progress") {
+            setProgress({ page: event.page, totalPages: event.totalPages, count: event.count });
+          } else if (event.type === "complete") {
+            setApartments(event.apartments);
+            setResult(event);
+            setProgress(null);
+            setPhase("complete");
+          } else if (event.type === "error") {
+            setError(event.message);
+            setPhase("complete");
+          }
+        }
+      }
+    } catch (err) {
+      if ((err as Error).name === "AbortError") return;
+      setError("Stream interrupted. Please try again.");
+      setPhase("complete");
+    }
+  }, [neighborhood, beds, baths, minPrice, maxPrice]);
 
   useEffect(() => {
     if (neighborhood) search();
+    return () => abortRef.current?.abort();
   }, [neighborhood, search]);
 
-  function goToPage(p: number) {
-    const params = new URLSearchParams(searchParams.toString());
-    params.set("page", String(p));
-    router.push(`/results?${params.toString()}`);
-  }
-
   const displayNeighborhood = neighborhood.replace(/-/g, " ");
+  const isLoading = phase === "idle";
+  const isScraping = phase === "scraping";
+  const isDone = phase === "complete";
 
   return (
     <div className="min-h-screen flex flex-col">
@@ -110,33 +253,105 @@ export default function ResultsClient() {
         </Link>
       </Navbar>
 
-      {/* Content */}
       <main className="flex-1 max-w-7xl mx-auto w-full px-4 sm:px-6 py-8">
-        {/* Status line */}
-        {!loading && result && (
-          <div className="flex flex-wrap items-center gap-3 mb-6 text-sm text-muted-foreground">
-            <span>
-              {result.total} apartment{result.total !== 1 ? "s" : ""} found
-            </span>
-            {result.fromCache ? (
-              <Badge variant="secondary" className="text-xs">
-                {result.stale ? "Stale cache" : "Cached"}
-              </Badge>
-            ) : (
-              <>
-                <Badge variant="secondary" className="text-xs text-primary">
-                  Live
-                </Badge>
-                {result.pagesScraped && result.pagesScraped > 1 && (
-                  <span className="text-xs text-muted-foreground/70">
-                    {result.pagesScraped} pages scraped
-                    {result.seTotal
-                      ? ` · ${result.seTotal.toLocaleString()} on StreetEasy`
-                      : ""}
-                  </span>
+
+        {/* Progress bar — shown while scraping pages 2..N */}
+        {isScraping && progress && (
+          <div className="mb-6 space-y-2">
+            <div className="flex items-center justify-between text-xs text-muted-foreground">
+              <span>
+                Fetching more listings… page {progress.page} of {progress.totalPages}
+              </span>
+              <span>{progress.count} found so far</span>
+            </div>
+            <div className="h-1.5 w-full rounded-full bg-muted overflow-hidden">
+              <div
+                className="h-full rounded-full bg-primary transition-all duration-500"
+                style={{ width: `${(progress.page / progress.totalPages) * 100}%` }}
+              />
+            </div>
+          </div>
+        )}
+
+        {/* Status line + sort/filter toolbar */}
+        {(isDone || isScraping) && apartments.length > 0 && (
+          <div className="flex flex-col gap-3 mb-6">
+            {/* Status line */}
+            {isDone && result && (
+              <div className="flex flex-wrap items-center gap-3 text-sm text-muted-foreground">
+                <span>
+                  {filteredApartments.length === result.total
+                    ? `${result.total} apartment${result.total !== 1 ? "s" : ""} found`
+                    : `${filteredApartments.length} of ${result.total} shown`}
+                </span>
+                {result.fromCache ? (
+                  <Badge variant="secondary" className="text-xs">
+                    {result.stale ? "Stale cache" : "Cached"}
+                  </Badge>
+                ) : (
+                  <>
+                    <Badge variant="secondary" className="text-xs text-primary">Live</Badge>
+                    {result.scrapedCount && (
+                      <span className="text-xs text-muted-foreground/70">
+                        {result.scrapedCount} scraped from StreetEasy
+                      </span>
+                    )}
+                  </>
                 )}
-              </>
+              </div>
             )}
+
+            {/* Sort / filter toolbar */}
+            <div className="flex flex-wrap items-center gap-3">
+              {/* Sort */}
+              <Select value={sortBy} onValueChange={(v) => setSortBy(v as SortKey)}>
+                <SelectTrigger className="h-8 w-44 text-xs">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="score">Best Score</SelectItem>
+                  <SelectItem value="price_asc">Price: Low → High</SelectItem>
+                  <SelectItem value="price_desc">Price: High → Low</SelectItem>
+                  <SelectItem value="sqft">Largest First</SelectItem>
+                </SelectContent>
+              </Select>
+
+              {/* Min score filter */}
+              <div className="flex items-center gap-1">
+                {([0, 5, 6, 7, 8] as const).map((s) => (
+                  <button
+                    key={s}
+                    onClick={() => setMinScore(s)}
+                    className={`h-8 px-3 rounded-md text-xs font-medium transition-colors border ${
+                      minScore === s
+                        ? "bg-primary text-primary-foreground border-primary"
+                        : "bg-transparent text-muted-foreground border-border hover:border-primary/50 hover:text-foreground"
+                    }`}
+                  >
+                    {s === 0 ? "Any score" : `${s}+`}
+                  </button>
+                ))}
+              </div>
+
+              {/* Beds quick filter — only show if search wasn't already scoped to specific beds */}
+              {!beds && (
+                <div className="flex items-center gap-1">
+                  {(["any", "studio", "1", "2", "3", "4+"] as const).map((b) => (
+                    <button
+                      key={b}
+                      onClick={() => setBedsFilter(b)}
+                      className={`h-8 px-3 rounded-md text-xs font-medium transition-colors border capitalize ${
+                        bedsFilter === b
+                          ? "bg-primary text-primary-foreground border-primary"
+                          : "bg-transparent text-muted-foreground border-border hover:border-primary/50 hover:text-foreground"
+                      }`}
+                    >
+                      {b === "any" ? "Any beds" : b === "studio" ? "Studio" : `${b} bed${b !== "1" ? "s" : ""}`}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
           </div>
         )}
 
@@ -150,8 +365,8 @@ export default function ResultsClient() {
           </div>
         )}
 
-        {/* Skeleton grid */}
-        {loading && (
+        {/* Initial skeleton */}
+        {isLoading && (
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
             {Array.from({ length: 8 }).map((_, i) => (
               <ApartmentCardSkeleton key={i} />
@@ -159,52 +374,50 @@ export default function ResultsClient() {
           </div>
         )}
 
-        {/* Results grid */}
-        {!loading && result && result.apartments.length > 0 && (
+        {/* Apartments grid */}
+        {pagedApartments.length > 0 && (
           <>
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-              {result.apartments.map((apt) => (
+              {pagedApartments.map((apt) => (
                 <ApartmentCard key={apt.id} apartment={apt} />
               ))}
             </div>
 
-            {/* Pagination */}
-            {result.totalPages > 1 && (
+            {/* Client-side pagination */}
+            {isDone && totalFilteredPages > 1 && (
               <div className="flex items-center justify-center gap-2 mt-10">
                 <Button
                   variant="outline"
                   size="sm"
-                  disabled={page <= 1}
-                  onClick={() => goToPage(page - 1)}
+                  disabled={clientPage <= 1}
+                  onClick={() => setClientPage((p) => p - 1)}
                 >
                   ← Previous
                 </Button>
-
                 <div className="flex items-center gap-1">
-                  {Array.from({ length: Math.min(result.totalPages, 7) }, (_, i) => {
+                  {Array.from({ length: Math.min(totalFilteredPages, 7) }, (_, i) => {
                     const p = i + 1;
                     return (
                       <Button
                         key={p}
-                        variant={p === page ? "default" : "ghost"}
+                        variant={p === clientPage ? "default" : "ghost"}
                         size="sm"
                         className="w-9 h-9 p-0"
-                        onClick={() => goToPage(p)}
+                        onClick={() => setClientPage(p)}
                       >
                         {p}
                       </Button>
                     );
                   })}
-                  {result.totalPages > 7 && (
+                  {totalFilteredPages > 7 && (
                     <span className="text-muted-foreground px-2">…</span>
                   )}
                 </div>
-
                 <Button
                   variant="outline"
                   size="sm"
-                  disabled={page >= result.totalPages}
-                  onClick={() => goToPage(page + 1)}
+                  disabled={clientPage >= totalFilteredPages}
+                  onClick={() => setClientPage((p) => p + 1)}
                 >
                   Next →
                 </Button>
@@ -213,8 +426,19 @@ export default function ResultsClient() {
           </>
         )}
 
-        {/* Empty state */}
-        {!loading && result && result.apartments.length === 0 && !error && (
+        {/* Empty state — no results after filters */}
+        {isDone && apartments.length > 0 && filteredApartments.length === 0 && !error && (
+          <div className="flex flex-col items-center justify-center py-16 gap-3 text-center">
+            <p className="text-lg font-semibold">No apartments match your filters</p>
+            <p className="text-muted-foreground text-sm">Try loosening the score threshold or bed count.</p>
+            <Button variant="outline" size="sm" onClick={() => { setMinScore(0); setBedsFilter("any"); }}>
+              Clear filters
+            </Button>
+          </div>
+        )}
+
+        {/* Empty state — no results at all */}
+        {isDone && apartments.length === 0 && !error && (
           <div className="flex flex-col items-center justify-center py-24 gap-4 text-center">
             <div className="text-6xl">🏙️</div>
             <h2 className="text-xl font-semibold">No apartments found</h2>

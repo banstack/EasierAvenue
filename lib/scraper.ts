@@ -164,9 +164,23 @@ function parseCards($: any, neighborhood: string): ScrapedListing[] {
         if (alt) {
           title = alt.includes("image") ? alt.split("image")[0].trim() : alt.trim();
         }
-        imageUrl = $img.attr("src") || $img.attr("data-src") || null;
-        if (imageUrl && !imageUrl.startsWith("http")) {
-          imageUrl = `https://streeteasy.com${imageUrl}`;
+
+        // Try attributes in priority order, skipping base64 placeholders
+        const srcCandidates = [
+          $img.attr("src"),
+          $img.attr("data-src"),
+          $img.attr("data-lazy-src"),
+          $img.attr("data-lazy"),
+          // srcset: take the first URL (lowest resolution is fine for cards)
+          ($img.attr("srcset") || "").split(",")[0]?.trim().split(" ")[0],
+        ];
+        for (const candidate of srcCandidates) {
+          if (candidate && !candidate.startsWith("data:")) {
+            imageUrl = candidate.startsWith("http")
+              ? candidate
+              : `https://streeteasy.com${candidate}`;
+            break;
+          }
         }
       }
 
@@ -255,10 +269,17 @@ function parseCards($: any, neighborhood: string): ScrapedListing[] {
   return listings;
 }
 
+export type OnPageCallback = (
+  pageNum: number,
+  totalPages: number,
+  listings: ScrapedListing[]
+) => void;
+
 export async function scrapeListings(
   baseUrl: string,
   neighborhood: string,
-  maxPages = DEFAULT_MAX_PAGES
+  maxPages = DEFAULT_MAX_PAGES,
+  onPage?: OnPageCallback
 ): Promise<ScrapeResult> {
   // --- Page 1 ---
   const html1 = await fetchWithRetry(pageUrl(baseUrl, 1));
@@ -278,6 +299,9 @@ export async function scrapeListings(
   const totalPages = seTotal
     ? Math.min(maxPages, Math.ceil(seTotal / listingsPerPage))
     : maxPages;
+
+  // Fire callback for page 1 immediately — callers can stream this before continuing
+  onPage?.(1, totalPages, page1Listings);
 
   if (totalPages <= 1) {
     return { listings: page1Listings, seTotal, pagesScraped: 1 };
@@ -313,12 +337,16 @@ export async function scrapeListings(
       break;
     }
 
+    const newListings: ScrapedListing[] = [];
     for (const listing of pageListings) {
       if (!seen.has(listing.id)) {
         seen.add(listing.id);
         allListings.push(listing);
+        newListings.push(listing);
       }
     }
+
+    onPage?.(pageNum, totalPages, newListings);
 
     console.log(
       `Page ${pageNum}/${totalPages}: +${pageListings.length} listings (${allListings.length} total)`

@@ -1,10 +1,9 @@
-import { NextRequest, NextResponse } from "next/server";
+import { NextRequest } from "next/server";
 import { getCachedApartments, saveApartments } from "@/lib/db";
-import { scrapeListings } from "@/lib/scraper";
+import { scrapeListings, type ScrapedListing } from "@/lib/scraper";
 import { scoreBatch } from "@/lib/rating";
 import { buildStreetEasyUrl } from "@/data/neighborhoods";
 
-// Allow up to 60s — paginated scraping of 15 pages takes ~25–30s
 export const maxDuration = 60;
 
 export interface SearchParams {
@@ -13,110 +12,124 @@ export interface SearchParams {
   baths?: string;
   minPrice?: number;
   maxPrice?: number;
-  page?: number;
+}
+
+const encoder = new TextEncoder();
+
+function sse(data: object): Uint8Array {
+  return encoder.encode(`data: ${JSON.stringify(data)}\n\n`);
+}
+
+function toApartmentShape(listings: ScrapedListing[], score: (number | null)[]) {
+  const now = Math.floor(Date.now() / 1000);
+  return listings.map((apt, i) => ({ ...apt, score: score[i], cached_at: now }));
 }
 
 export async function POST(req: NextRequest) {
+  let body: SearchParams;
   try {
-    const body: SearchParams = await req.json();
-    const { neighborhood, beds, baths, minPrice, maxPrice, page = 1 } = body;
-
-    if (!neighborhood) {
-      return NextResponse.json({ error: "neighborhood is required" }, { status: 400 });
-    }
-
-    const PAGE_SIZE = 20;
-
-    // Try cache first
-    const cached = getCachedApartments({
-      neighborhood,
-      beds,
-      baths,
-      minPrice,
-      maxPrice,
-      page,
-      pageSize: PAGE_SIZE,
+    body = await req.json();
+  } catch {
+    return new Response(JSON.stringify({ error: "Invalid request body" }), {
+      status: 400,
+      headers: { "Content-Type": "application/json" },
     });
-
-    if (cached.fromCache && cached.apartments.length > 0) {
-      return NextResponse.json({
-        apartments: cached.apartments,
-        total: cached.total,
-        page,
-        pageSize: PAGE_SIZE,
-        totalPages: Math.ceil(cached.total / PAGE_SIZE),
-        fromCache: true,
-      });
-    }
-
-    // Cache miss — scrape live (all pages)
-    const url = buildStreetEasyUrl({ neighborhood, beds, minPrice, maxPrice });
-
-    let scrapeResult;
-    try {
-      scrapeResult = await scrapeListings(url, neighborhood);
-    } catch (err) {
-      console.error("Scrape failed:", err);
-      if (cached.apartments.length > 0) {
-        return NextResponse.json({
-          apartments: cached.apartments,
-          total: cached.total,
-          page,
-          pageSize: PAGE_SIZE,
-          totalPages: Math.ceil(cached.total / PAGE_SIZE),
-          fromCache: true,
-          stale: true,
-        });
-      }
-      return NextResponse.json(
-        { error: "Failed to fetch listings. StreetEasy may be rate limiting — try again shortly." },
-        { status: 503 }
-      );
-    }
-
-    const { listings: scraped, seTotal, pagesScraped } = scrapeResult;
-
-    if (scraped.length === 0) {
-      return NextResponse.json({
-        apartments: [],
-        total: 0,
-        page: 1,
-        pageSize: PAGE_SIZE,
-        totalPages: 0,
-        fromCache: false,
-        seTotal,
-        pagesScraped,
-      });
-    }
-
-    // Score and persist
-    const scored = scoreBatch(scraped);
-    const now = Math.floor(Date.now() / 1000);
-    saveApartments(scored.map((apt) => ({ ...apt, cached_at: now })));
-
-    // Re-query with filters applied
-    const fresh = getCachedApartments({
-      neighborhood,
-      beds,
-      baths,
-      minPrice,
-      maxPrice,
-      page,
-      pageSize: PAGE_SIZE,
-    });
-
-    return NextResponse.json({
-      apartments: fresh.apartments,
-      total: fresh.total,
-      page,
-      pageSize: PAGE_SIZE,
-      totalPages: Math.ceil(fresh.total / PAGE_SIZE),
-      fromCache: false,
-      seTotal,
-      pagesScraped,
-    });
-  } catch (err) {
-    console.error("Search error:", err);
-    return NextResponse.json({ error: "Internal server error" }, { status: 500 });
   }
+
+  const { neighborhood, beds, baths, minPrice, maxPrice } = body;
+
+  if (!neighborhood) {
+    return new Response(JSON.stringify({ error: "neighborhood is required" }), {
+      status: 400,
+      headers: { "Content-Type": "application/json" },
+    });
+  }
+
+  // --- Cache hit: return plain JSON with all apartments ---
+  const cached = getCachedApartments({ neighborhood, beds, baths, minPrice, maxPrice });
+
+  if (cached.fromCache && cached.apartments.length > 0) {
+    return new Response(
+      JSON.stringify({
+        type: "complete",
+        apartments: cached.apartments,
+        total: cached.apartments.length,
+        fromCache: true,
+      }),
+      { headers: { "Content-Type": "application/json" } }
+    );
+  }
+
+  // --- Cache miss: stream SSE ---
+  const url = buildStreetEasyUrl({ neighborhood, beds, minPrice, maxPrice });
+  const allScraped: ScrapedListing[] = [];
+
+  const stream = new ReadableStream({
+    async start(controller) {
+      try {
+        await scrapeListings(url, neighborhood, 15, (pageNum, totalPages, pageListings) => {
+          allScraped.push(...pageListings);
+
+          if (pageNum === 1) {
+            // Score page 1 and send immediately so the UI can render
+            const scored = scoreBatch(pageListings);
+            const apartments = toApartmentShape(pageListings, scored.map((s) => s.score));
+            controller.enqueue(sse({ type: "initial", apartments, totalPages }));
+          } else {
+            controller.enqueue(
+              sse({ type: "progress", page: pageNum, totalPages, count: allScraped.length })
+            );
+          }
+        });
+      } catch (err) {
+        console.error("Scrape error:", err);
+        // Stale cache fallback
+        const stale = getCachedApartments({ neighborhood, beds, baths, minPrice, maxPrice });
+        if (stale.apartments.length > 0) {
+          controller.enqueue(
+            sse({
+              type: "complete",
+              apartments: stale.apartments,
+              total: stale.apartments.length,
+              fromCache: true,
+              stale: true,
+            })
+          );
+        } else {
+          controller.enqueue(
+            sse({ type: "error", message: "Failed to fetch listings. Try again shortly." })
+          );
+        }
+        controller.close();
+        return;
+      }
+
+      // Score + persist all scraped listings
+      const scored = scoreBatch(allScraped);
+      const now = Math.floor(Date.now() / 1000);
+      saveApartments(scored.map((apt) => ({ ...apt, cached_at: now })));
+
+      // Return all results from DB
+      const fresh = getCachedApartments({ neighborhood, beds, baths, minPrice, maxPrice });
+
+      controller.enqueue(
+        sse({
+          type: "complete",
+          apartments: fresh.apartments,
+          total: fresh.apartments.length,
+          fromCache: false,
+          scrapedCount: allScraped.length,
+        })
+      );
+      controller.close();
+    },
+  });
+
+  return new Response(stream, {
+    headers: {
+      "Content-Type": "text/event-stream",
+      "Cache-Control": "no-cache",
+      Connection: "keep-alive",
+    },
+  });
 }

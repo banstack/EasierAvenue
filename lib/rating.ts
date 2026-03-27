@@ -57,10 +57,10 @@ export function scoreColor(score: number): string {
 }
 
 export function scoreBgColor(score: number): string {
-  if (score >= 8) return "bg-green-500/15 border-green-500/30 text-green-400";
-  if (score >= 6) return "bg-blue-500/15 border-blue-500/30 text-blue-400";
-  if (score >= 4) return "bg-yellow-500/15 border-yellow-500/30 text-yellow-400";
-  return "bg-red-500/15 border-red-500/30 text-red-400";
+  if (score >= 8) return "bg-green-600/85 border-green-600/60 text-white";
+  if (score >= 6) return "bg-blue-600/85 border-blue-600/60 text-white";
+  if (score >= 4) return "bg-yellow-500/85 border-yellow-500/60 text-white";
+  return "bg-red-600/85 border-red-600/60 text-white";
 }
 
 export function scoreLabel(score: number): string {

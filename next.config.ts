@@ -4,17 +4,13 @@ const nextConfig: NextConfig = {
   output: "standalone",
   images: {
     remotePatterns: [
-      {
-        protocol: "https",
-        hostname: "*.streeteasy.com",
-      },
-      {
-        protocol: "https",
-        hostname: "streeteasy.com",
-      },
+      { protocol: "https", hostname: "*.streeteasy.com" },
+      { protocol: "https", hostname: "streeteasy.com" },
+      // StreetEasy is owned by Zillow — listing photos are served from Zillow's CDN
+      { protocol: "https", hostname: "*.zillowstatic.com" },
+      { protocol: "https", hostname: "zillowstatic.com" },
     ],
   },
-  // Prevent better-sqlite3 (native module) from being bundled client-side
   serverExternalPackages: ["better-sqlite3"],
 };
 

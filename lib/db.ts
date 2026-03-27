@@ -76,11 +76,9 @@ export function getCachedApartments(params: {
   baths?: string;
   minPrice?: number;
   maxPrice?: number;
-  page?: number;
-  pageSize?: number;
-}): { apartments: Apartment[]; total: number; fromCache: boolean } {
+}): { apartments: Apartment[]; fromCache: boolean } {
   const db = getDb();
-  const { neighborhood, beds, baths, minPrice, maxPrice, page = 1, pageSize = 20 } = params;
+  const { neighborhood, beds, minPrice, maxPrice } = params;
 
   const cutoff = Math.floor(Date.now() / 1000) - CACHE_TTL_SECONDS;
 
@@ -94,7 +92,7 @@ export function getCachedApartments(params: {
 
   const fromCache = freshCount.cnt > 0;
 
-  // Build filter query
+  // Build filter query (search-time filters only — beds/price from the original search form)
   const conditions: string[] = ["neighborhood = ?"];
   const values: (string | number)[] = [neighborhood];
 
@@ -117,21 +115,12 @@ export function getCachedApartments(params: {
   }
 
   const where = conditions.join(" AND ");
-  const offset = (page - 1) * pageSize;
-
-  const total = (
-    db.prepare(`SELECT COUNT(*) as cnt FROM apartments WHERE ${where}`).get(...values) as { cnt: number }
-  ).cnt;
 
   const apartments = db
-    .prepare(
-      `SELECT * FROM apartments WHERE ${where}
-       ORDER BY score DESC NULLS LAST, cached_at DESC
-       LIMIT ? OFFSET ?`
-    )
-    .all(...values, pageSize, offset) as Apartment[];
+    .prepare(`SELECT * FROM apartments WHERE ${where} ORDER BY score DESC NULLS LAST, cached_at DESC`)
+    .all(...values) as Apartment[];
 
-  return { apartments, total, fromCache };
+  return { apartments, fromCache };
 }
 
 export function saveApartments(apartments: Apartment[]) {
