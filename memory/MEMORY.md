@@ -1,0 +1,1 @@
+- [EasierAvenue overhaul](project_overhaul.md) — Next.js 14 rewrite of StreetEasy Finder; stack, file map, Railway deploy config
