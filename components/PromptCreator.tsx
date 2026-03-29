@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { motion } from "framer-motion";
 import { useRouter } from "next/navigation";
 import {
   Select,
@@ -107,17 +108,27 @@ export default function PromptCreator() {
       <Navbar />
       <div className="flex flex-col items-center justify-center flex-1 px-4 gap-12">
       {/* Brand */}
-      <div className="text-center">
+      <motion.div
+        className="text-center"
+        initial={{ opacity: 0, y: -24 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.5, ease: "easeOut" }}
+      >
         <h1 className="text-5xl md:text-6xl font-bold tracking-tight">
           Easier<span className="text-primary">Avenue</span>
         </h1>
         <p className="text-muted-foreground mt-2 text-lg">
           NYC apartment search, smarter.
         </p>
-      </div>
+      </motion.div>
 
       {/* Prompt card */}
-      <div className="w-full max-w-4xl rounded-2xl border border-border bg-card p-8 md:p-12 shadow-2xl shadow-primary/5">
+      <motion.div
+        className="w-full max-w-4xl rounded-2xl border border-border bg-card p-8 md:p-12 shadow-2xl shadow-primary/5"
+        initial={{ opacity: 0, y: 24 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.5, delay: 0.1, ease: "easeOut" }}
+      >
         <p className="text-muted-foreground text-sm uppercase tracking-widest mb-6 font-medium">
           Tell us what you&apos;re looking for
         </p>
@@ -219,7 +230,7 @@ export default function PromptCreator() {
             Only neighborhood is required
           </p>
         </div>
-      </div>
+      </motion.div>
       </div>
     </div>
   );

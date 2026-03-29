@@ -1,7 +1,9 @@
 "use client";
 
 import { useEffect, useState, useCallback, useRef, useMemo } from "react";
+import { motion, AnimatePresence } from "framer-motion";
 import { RotateCw } from "lucide-react";
+import PixelRobot from "@/components/PixelRobot";
 import { getCombinedScore } from "@/lib/rating";
 import { useSearchParams } from "next/navigation";
 import Link from "next/link";
@@ -31,6 +33,25 @@ interface CompleteResult {
   scrapedCount?: number;
   cachedAt?: number;
 }
+
+
+const LOADING_MESSAGES = [
+  "Sneaking past StreetEasy's bouncer…",
+  "Pretending to be a normal human browser…",
+  "Bribing the listing gods with fake user-agents…",
+  "Teaching a bot to apartment hunt so you don't have to…",
+  "Harvesting data like a digital landlord…",
+  "Politely asking StreetEasy to share its listings (it doesn't know)…",
+  "Deploying robot minions across 15 pages…",
+  "Sipping coffee while the scraper does the heavy lifting…",
+  "Reading HTML so you never have to…",
+  "Doing 1,500 milliseconds of ethical waiting between pages…",
+  "Inspecting DOM nodes like a very nosy neighbor…",
+  "Calculating transit scores for apartments you'll probably never visit…",
+  "Cross-referencing 300+ subway stations just for you…",
+  "Parsing price-per-sqft because your landlord won't tell you…",
+  "Loading complete information takes a moment — hang tight!",
+];
 
 
 function formatRelativeTime(unixSeconds: number): string {
@@ -69,6 +90,7 @@ export default function ResultsClient() {
   const [cachedAt, setCachedAt] = useState<number | null>(null);
   const [relativeTime, setRelativeTime] = useState<string>("");
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [loadingMsgIdx, setLoadingMsgIdx] = useState(0);
 
   // Live-update "X minutes ago" label
   useEffect(() => {
@@ -77,6 +99,15 @@ export default function ResultsClient() {
     const id = setInterval(() => setRelativeTime(formatRelativeTime(cachedAt)), 60_000);
     return () => clearInterval(id);
   }, [cachedAt]);
+
+  // Rotate loading messages while fetching
+  useEffect(() => {
+    if (phase === "idle" || phase === "scraping") {
+      setLoadingMsgIdx(0);
+      const id = setInterval(() => setLoadingMsgIdx((i) => (i + 1) % LOADING_MESSAGES.length), 3000);
+      return () => clearInterval(id);
+    }
+  }, [phase]);
 
   // AbortController ref — cancels in-flight stream when deps change
   const abortRef = useRef<AbortController | null>(null);
@@ -300,11 +331,29 @@ export default function ResultsClient() {
 
         {/* Progress bar — shown while scraping pages 2..N */}
         {isScraping && progress && (
-          <div className="mb-6 space-y-2">
+          <div className="mb-6 space-y-3">
+            <div className="rounded-xl border border-border/50 bg-muted/20 px-5 py-4 flex items-start gap-4">
+              <PixelRobot msgIdx={loadingMsgIdx} />
+              <div className="space-y-1.5 min-w-0">
+                <AnimatePresence mode="wait">
+                  <motion.p
+                    key={loadingMsgIdx}
+                    className="text-sm font-medium text-foreground"
+                    initial={{ opacity: 0, y: 6 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0, y: -6 }}
+                    transition={{ duration: 0.25 }}
+                  >
+                    {LOADING_MESSAGES[loadingMsgIdx]}
+                  </motion.p>
+                </AnimatePresence>
+                <p className="text-xs text-muted-foreground">
+                  Scores, transit data, and concessions won&apos;t be complete until all pages are loaded.
+                </p>
+              </div>
+            </div>
             <div className="flex items-center justify-between text-xs text-muted-foreground">
-              <span>
-                Fetching more listings… page {progress.page} of {progress.totalPages}
-              </span>
+              <span>Page {progress.page} of {progress.totalPages}</span>
               <span>{progress.count} found so far</span>
             </div>
             <div className="h-1.5 w-full rounded-full bg-muted overflow-hidden">
@@ -421,29 +470,66 @@ export default function ResultsClient() {
         {error && (
           <div className="rounded-xl border border-destructive/30 bg-destructive/10 p-6 text-center mb-6">
             <p className="text-destructive font-medium">{error}</p>
-            <Button variant="outline" size="sm" className="mt-3" onClick={search}>
+            <Button variant="outline" size="sm" className="mt-3" onClick={() => search()}>
               Retry
             </Button>
           </div>
         )}
 
-        {/* Initial skeleton */}
+        {/* Initial skeleton + loading message */}
         {isLoading && (
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-            {Array.from({ length: 8 }).map((_, i) => (
-              <ApartmentCardSkeleton key={i} />
-            ))}
+          <div className="space-y-6">
+            <div className="rounded-xl border border-border/50 bg-muted/20 px-5 py-4 flex items-start gap-4">
+              <PixelRobot msgIdx={loadingMsgIdx} />
+              <div className="space-y-1.5 min-w-0">
+                <AnimatePresence mode="wait">
+                  <motion.p
+                    key={loadingMsgIdx}
+                    className="text-sm font-medium text-foreground"
+                    initial={{ opacity: 0, y: 6 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0, y: -6 }}
+                    transition={{ duration: 0.25 }}
+                  >
+                    {LOADING_MESSAGES[loadingMsgIdx]}
+                  </motion.p>
+                </AnimatePresence>
+                <p className="text-xs text-muted-foreground">
+                  We&apos;re web scraping StreetEasy across multiple pages — this takes 20–60 seconds.{" "}
+                  <span className="text-muted-foreground/70">Scores, transit data, and concessions won&apos;t appear until loading is complete.</span>
+                </p>
+              </div>
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+              {Array.from({ length: 8 }).map((_, i) => (
+                <ApartmentCardSkeleton key={i} />
+              ))}
+            </div>
           </div>
         )}
 
         {/* Apartments grid */}
         {pagedApartments.length > 0 && (
           <>
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+            <motion.div
+              key={clientPage}
+              className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4"
+              initial="hidden"
+              animate="show"
+              variants={{ hidden: {}, show: { transition: { staggerChildren: 0.05 } } }}
+            >
               {pagedApartments.map((apt) => (
-                <ApartmentCard key={apt.id} apartment={apt} />
+                <motion.div
+                  key={apt.id}
+                  variants={{
+                    hidden: { opacity: 0, y: 16 },
+                    show: { opacity: 1, y: 0, transition: { duration: 0.3, ease: "easeOut" } },
+                  }}
+                >
+                  <ApartmentCard apartment={apt} />
+                </motion.div>
               ))}
-            </div>
+            </motion.div>
 
             {/* Client-side pagination */}
             {isDone && totalFilteredPages > 1 && (
