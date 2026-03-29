@@ -1,7 +1,17 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { motion } from "framer-motion";
+import { cn } from "@/lib/utils";
+import { badgeVariants } from "@/components/ui/badge";
+import {
+  loadRecentSearches,
+  saveRecentSearch,
+  buildSearchLabel,
+  buildSearchUrl,
+  type RecentSearch,
+} from "@/lib/recentSearches";
+import { getNeighborhoodBySlug } from "@/data/neighborhoods";
 import { useRouter } from "next/navigation";
 import {
   Select,
@@ -81,6 +91,11 @@ export default function PromptCreator() {
   const set = (setter: (v: string) => void) => (v: string | null) => setter(v ?? "");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [recentSearches, setRecentSearches] = useState<RecentSearch[]>([]);
+
+  useEffect(() => {
+    setRecentSearches(loadRecentSearches());
+  }, []);
 
   function isValid() {
     return neighborhood.length > 0;
@@ -94,13 +109,9 @@ export default function PromptCreator() {
     setError("");
     setLoading(true);
 
-    const params = new URLSearchParams({ neighborhood });
-    if (beds) params.set("beds", beds);
-    if (baths) params.set("baths", baths);
-    if (minPrice) params.set("minPrice", minPrice);
-    if (maxPrice) params.set("maxPrice", maxPrice);
-
-    router.push(`/results?${params.toString()}`);
+    const params = { neighborhood, beds, baths, minPrice, maxPrice };
+    saveRecentSearch(params);
+    router.push(buildSearchUrl(params));
   }
 
   return (
@@ -231,6 +242,33 @@ export default function PromptCreator() {
           </p>
         </div>
       </motion.div>
+
+      {recentSearches.length > 0 && (
+        <motion.div
+          className="w-full max-w-4xl"
+          initial={{ opacity: 0, y: 16 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.4, delay: 0.25, ease: "easeOut" }}
+        >
+          <p className="text-xs text-muted-foreground uppercase tracking-widest mb-3 font-medium">
+            Recent searches
+          </p>
+          <div className="flex flex-wrap gap-2">
+            {recentSearches.map((search) => (
+              <button
+                key={search.id}
+                onClick={() => router.push(buildSearchUrl(search))}
+                className={cn(
+                  badgeVariants({ variant: "outline" }),
+                  "cursor-pointer h-auto py-1.5 px-3 text-xs hover:bg-muted transition-colors"
+                )}
+              >
+                {buildSearchLabel(search, getNeighborhoodBySlug)}
+              </button>
+            ))}
+          </div>
+        </motion.div>
+      )}
       </div>
     </div>
   );
