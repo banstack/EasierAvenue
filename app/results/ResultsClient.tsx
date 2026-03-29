@@ -1,6 +1,8 @@
 "use client";
 
 import { useEffect, useState, useCallback, useRef, useMemo } from "react";
+import { RotateCw } from "lucide-react";
+import { getCombinedScore } from "@/lib/rating";
 import { useSearchParams } from "next/navigation";
 import Link from "next/link";
 import ApartmentCard from "@/components/ApartmentCard";
@@ -11,7 +13,7 @@ import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import type { Apartment } from "@/lib/db";
 
-type SortKey = "score" | "price_asc" | "price_desc" | "sqft";
+type SortKey = "score" | "price_asc" | "price_desc" | "sqft" | "transit";
 
 type ScrapePhase = "idle" | "initial" | "scraping" | "complete";
 
@@ -27,6 +29,13 @@ interface CompleteResult {
   fromCache: boolean;
   stale?: boolean;
   scrapedCount?: number;
+  cachedAt?: number;
+}
+
+function formatRelativeTime(unixSeconds: number): string {
+  const mins = Math.floor((Date.now() / 1000 - unixSeconds) / 60);
+  if (mins < 1) return "just now";
+  return `${mins} minute${mins !== 1 ? "s" : ""} ago`;
 }
 
 export default function ResultsClient() {
@@ -52,20 +61,38 @@ export default function ResultsClient() {
 
   // Reset to page 1 whenever filters/sort change
   useEffect(() => { setClientPage(1); }, [sortBy, minScore, bedsFilter]);
+
   const [progress, setProgress] = useState<Progress | null>(null);
   const [result, setResult] = useState<CompleteResult | null>(null);
   const [error, setError] = useState("");
+  const [cachedAt, setCachedAt] = useState<number | null>(null);
+  const [relativeTime, setRelativeTime] = useState<string>("");
+  const [isRefreshing, setIsRefreshing] = useState(false);
+
+  // Live-update "X minutes ago" label
+  useEffect(() => {
+    if (!cachedAt) { setRelativeTime(""); return; }
+    setRelativeTime(formatRelativeTime(cachedAt));
+    const id = setInterval(() => setRelativeTime(formatRelativeTime(cachedAt)), 60_000);
+    return () => clearInterval(id);
+  }, [cachedAt]);
 
   // AbortController ref — cancels in-flight stream when deps change
   const abortRef = useRef<AbortController | null>(null);
+  // Ref mirror of apartments so search() can check .length without being a dep
+  const apartmentsRef = useRef<Apartment[]>([]);
+  useEffect(() => { apartmentsRef.current = apartments; }, [apartments]);
 
   // All apartments after sort/filter (no pagination — used for counts + pagination math)
   const filteredApartments = useMemo(() => {
     let list = [...apartments];
 
-    // Filter: min score
+    // Filter: min score (uses combined score)
     if (minScore > 0) {
-      list = list.filter((a) => a.score !== null && a.score >= minScore);
+      list = list.filter((a) => {
+        const combined = getCombinedScore(a.score ?? null, a.transit_score ?? null);
+        return combined !== null && combined >= minScore;
+      });
     }
 
     // Filter: beds
@@ -85,7 +112,9 @@ export default function ResultsClient() {
     // Sort
     list.sort((a, b) => {
       if (sortBy === "score") {
-        return (b.score ?? 0) - (a.score ?? 0);
+        const aScore = getCombinedScore(a.score ?? null, a.transit_score ?? null) ?? 0;
+        const bScore = getCombinedScore(b.score ?? null, b.transit_score ?? null) ?? 0;
+        return bScore - aScore;
       }
       if (sortBy === "price_asc") {
         return (a.price_num ?? Infinity) - (b.price_num ?? Infinity);
@@ -95,6 +124,9 @@ export default function ResultsClient() {
       }
       if (sortBy === "sqft") {
         return (b.sqft_num ?? 0) - (a.sqft_num ?? 0);
+      }
+      if (sortBy === "transit") {
+        return (b.transit_score ?? 0) - (a.transit_score ?? 0);
       }
       return 0;
     });
@@ -110,17 +142,18 @@ export default function ResultsClient() {
 
   const totalFilteredPages = Math.ceil(filteredApartments.length / PAGE_SIZE);
 
-  const search = useCallback(async () => {
+  const search = useCallback(async (force = false) => {
     // Cancel any previous request
     abortRef.current?.abort();
     const controller = new AbortController();
     abortRef.current = controller;
 
     setPhase("idle");
-    setApartments([]);
+    if (!force || apartmentsRef.current.length === 0) setApartments([]);
     setProgress(null);
     setResult(null);
     setError("");
+    setCachedAt(null);
 
     const body = JSON.stringify({
       neighborhood,
@@ -128,6 +161,7 @@ export default function ResultsClient() {
       baths: baths || undefined,
       minPrice: minPrice ? parseInt(minPrice) : undefined,
       maxPrice: maxPrice ? parseInt(maxPrice) : undefined,
+      force: force || undefined,
     });
 
     let res: Response;
@@ -155,6 +189,7 @@ export default function ResultsClient() {
       } else {
         setApartments(data.apartments);
         setResult(data);
+        if (data.cachedAt) setCachedAt(data.cachedAt);
       }
       setPhase("complete");
       return;
@@ -200,6 +235,7 @@ export default function ResultsClient() {
           } else if (event.type === "complete") {
             setApartments(event.apartments);
             setResult(event);
+            if (event.cachedAt) setCachedAt(event.cachedAt);
             setProgress(null);
             setPhase("complete");
           } else if (event.type === "error") {
@@ -214,6 +250,12 @@ export default function ResultsClient() {
       setPhase("complete");
     }
   }, [neighborhood, beds, baths, minPrice, maxPrice]);
+
+  const handleRefresh = useCallback(async () => {
+    setIsRefreshing(true);
+    await search(true);
+    setIsRefreshing(false);
+  }, [search]);
 
   useEffect(() => {
     if (neighborhood) search();
@@ -285,12 +327,30 @@ export default function ResultsClient() {
                     : `${filteredApartments.length} of ${result.total} shown`}
                 </span>
                 {result.fromCache ? (
-                  <Badge variant="secondary" className="text-xs">
-                    {result.stale ? "Stale cache" : "Cached"}
-                  </Badge>
+                  <>
+                    <Badge variant="secondary" className="text-xs">
+                      {result.stale ? "Stale" : "Cached"}
+                    </Badge>
+                    {relativeTime && (
+                      <span className="text-xs text-muted-foreground/70">Updated {relativeTime}</span>
+                    )}
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="h-7 gap-1.5 text-xs px-2"
+                      disabled={isRefreshing}
+                      onClick={handleRefresh}
+                    >
+                      <RotateCw className={`h-3 w-3 ${isRefreshing ? "animate-spin" : ""}`} />
+                      {isRefreshing ? "Refreshing…" : "Refresh"}
+                    </Button>
+                  </>
                 ) : (
                   <>
                     <Badge variant="secondary" className="text-xs text-primary">Live</Badge>
+                    {relativeTime && (
+                      <span className="text-xs text-muted-foreground/70">Updated {relativeTime}</span>
+                    )}
                     {result.scrapedCount && (
                       <span className="text-xs text-muted-foreground/70">
                         {result.scrapedCount} scraped from StreetEasy
@@ -313,6 +373,7 @@ export default function ResultsClient() {
                   <SelectItem value="price_asc">Price: Low → High</SelectItem>
                   <SelectItem value="price_desc">Price: High → Low</SelectItem>
                   <SelectItem value="sqft">Largest First</SelectItem>
+                  <SelectItem value="transit">Best Transit</SelectItem>
                 </SelectContent>
               </Select>
 

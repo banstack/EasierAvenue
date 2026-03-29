@@ -10,6 +10,7 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { scoreBgColor, scoreLabel, type ScoreBreakdown } from "@/lib/rating";
+import { transitScoreBgColor, transitScoreLabel, getTransitBreakdown } from "@/lib/transit";
 import type { Apartment } from "@/lib/db";
 
 interface ListingModalProps {
@@ -23,12 +24,12 @@ function ScoreBar({ score }: { score: number }) {
   const pct = ((score - 1) / 9) * 100;
   const color =
     score >= 8
-      ? "bg-green-500"
+      ? "bg-green-400/70"
       : score >= 6
-      ? "bg-blue-500"
+      ? "bg-blue-400/70"
       : score >= 4
-      ? "bg-yellow-500"
-      : "bg-red-500";
+      ? "bg-yellow-400/70"
+      : "bg-red-400/70";
 
   return (
     <div className="relative h-2 w-full rounded-full bg-muted overflow-hidden">
@@ -68,6 +69,8 @@ export default function ListingModal({
   breakdown,
 }: ListingModalProps) {
   const displayNeighborhood = apt.neighborhood?.replace(/-/g, " ") ?? "";
+  const transitBreakdown =
+    apt.lat != null && apt.lng != null ? getTransitBreakdown(apt.lat, apt.lng) : null;
 
   return (
     <Dialog open={open} onOpenChange={(v) => !v && onClose()}>
@@ -77,8 +80,11 @@ export default function ListingModal({
           <DialogTitle>{apt.title}</DialogTitle>
         </DialogHeader>
 
-        {/* 2×2 grid — rows share equal height */}
-        <div className="grid grid-cols-2" style={{ gridTemplateRows: "280px 1fr" }}>
+        <div className="overflow-y-auto max-h-[90vh]">
+        {/* Focus sentinel — gives Base UI something to focus at the top so it never scrolls to the button */}
+        <span tabIndex={0} aria-hidden="true" className="sr-only" />
+        {/* 2×2 grid — top row fixed height, bottom row auto (content-driven so outer container scrolls) */}
+        <div className="grid grid-cols-2" style={{ gridTemplateRows: "280px auto" }}>
 
           {/* ── Top-left: Image ── */}
           <div className="relative bg-muted rounded-tl-lg overflow-hidden">
@@ -110,7 +116,7 @@ export default function ListingModal({
           </div>
 
           {/* ── Top-right: Basic Information ── */}
-          <div className="p-7 flex flex-col gap-5 border-l border-border/50 overflow-y-auto">
+          <div className="p-7 flex flex-col gap-5 border-l border-border/50">
             <div className="space-y-1">
               <p className="text-2xl font-bold">
                 {apt.price !== "N/A" ? apt.price : "—"}
@@ -144,33 +150,53 @@ export default function ListingModal({
                   <p className="text-sm font-semibold">{apt.sqft}</p>
                 </div>
               )}
+              {apt.available_date && (
+                <div className="rounded-xl border bg-muted/30 px-4 py-3">
+                  <p className="text-[11px] text-muted-foreground mb-1">Available</p>
+                  <p className="text-sm font-semibold capitalize">{apt.available_date}</p>
+                </div>
+              )}
+              {apt.days_on_market !== null && apt.days_on_market !== undefined && (
+                <div className="rounded-xl border bg-muted/30 px-4 py-3">
+                  <p className="text-[11px] text-muted-foreground mb-1">On market</p>
+                  <p className="text-sm font-semibold">
+                    {apt.days_on_market === 0 ? "New listing" : `${apt.days_on_market} day${apt.days_on_market !== 1 ? "s" : ""}`}
+                  </p>
+                </div>
+              )}
             </div>
           </div>
 
-          {/* ── Bottom-left: Score Breakdown ── */}
-          <div className="p-7 border-t border-border/50 flex flex-col gap-5 overflow-y-auto">
+          {/* ── Bottom-left: Overall Score ── */}
+          <div className="p-7 border-t border-border/50 flex flex-col gap-5">
             <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-              Score Breakdown
+              Overall Score
             </h3>
 
             {breakdown ? (
               <>
+                {/* Combined score summary */}
                 <div className="flex items-center gap-4 rounded-xl border bg-muted/30 px-4 py-3">
                   <div
-                    className={`flex h-14 w-14 shrink-0 flex-col items-center justify-center rounded-xl border ${scoreBgColor(breakdown.finalScore)}`}
+                    className={`flex h-14 w-14 shrink-0 flex-col items-center justify-center rounded-xl border ${scoreBgColor(breakdown.combinedScore)}`}
                   >
-                    <span className="text-2xl font-bold leading-none">{breakdown.finalScore}</span>
+                    <span className="text-2xl font-bold leading-none">{breakdown.combinedScore}</span>
                     <span className="text-[10px] font-medium leading-tight mt-0.5">/ 10</span>
                   </div>
                   <div>
-                    <p className="font-semibold text-sm">{scoreLabel(breakdown.finalScore)}</p>
+                    <p className="font-semibold text-sm">{scoreLabel(breakdown.combinedScore)}</p>
                     <p className="text-xs text-muted-foreground capitalize mt-0.5">
-                      {displayNeighborhood} · {breakdown.sqftComponent ? "2 components" : "1 component"}, equal weight
+                      {displayNeighborhood} ·{" "}
+                      {breakdown.transitScore !== null
+                        ? `${breakdown.sqftComponent ? "3" : "2"} components`
+                        : `${breakdown.sqftComponent ? "2" : "1"} component${breakdown.sqftComponent ? "s" : ""}`
+                      }, equal weight
                     </p>
                   </div>
                 </div>
 
                 <div className="space-y-5">
+                  {/* Price component */}
                   <ComponentRow
                     label="Price vs. neighborhood median"
                     score={breakdown.priceComponent.score}
@@ -183,6 +209,7 @@ export default function ListingModal({
                     }
                   />
 
+                  {/* Sqft component */}
                   {breakdown.sqftComponent ? (
                     <ComponentRow
                       label="Price per ft² vs. neighborhood avg"
@@ -191,19 +218,44 @@ export default function ListingModal({
                     />
                   ) : (
                     <div className="rounded-xl border border-dashed border-border p-4 text-xs text-muted-foreground">
-                      <strong>Price per ft²</strong> — not available. Final score uses price component only.
+                      <strong>Price per ft²</strong> — not available. Skipped from calculation.
+                    </div>
+                  )}
+
+                  {/* Transit component */}
+                  {breakdown.transitScore !== null ? (
+                    <ComponentRow
+                      label="Transit access"
+                      score={breakdown.transitScore}
+                      detail={
+                        transitBreakdown
+                          ? `${transitBreakdown.nearestStation.name} · ${transitBreakdown.distanceMiles} mi (~${transitBreakdown.walkMinutes} min walk)`
+                          : `Score: ${breakdown.transitScore}/10`
+                      }
+                    />
+                  ) : (
+                    <div className="rounded-xl border border-dashed border-border p-4 text-xs text-muted-foreground">
+                      <strong>Transit</strong> — not available. Address could not be geocoded.
                     </div>
                   )}
                 </div>
 
-                {breakdown.sqftComponent && (
-                  <div className="rounded-xl bg-muted/40 px-4 py-3 text-xs text-muted-foreground">
-                    Final = ({breakdown.priceComponent.score} + {breakdown.sqftComponent.score}) ÷ 2 ={" "}
-                    <strong className="text-foreground">{breakdown.finalScore}</strong>
-                  </div>
-                )}
+                {/* Formula footnote */}
+                <div className="rounded-xl bg-muted/40 px-4 py-3 text-xs text-muted-foreground">
+                  {breakdown.transitScore !== null ? (
+                    <>
+                      Affordability ({breakdown.affordabilityScore}) + Transit ({breakdown.transitScore}) ÷ 2 ={" "}
+                      <strong className="text-foreground">{breakdown.combinedScore}</strong>
+                    </>
+                  ) : (
+                    <>
+                      No transit data · Affordability score only ={" "}
+                      <strong className="text-foreground">{breakdown.combinedScore}</strong>
+                    </>
+                  )}
+                </div>
 
-                <p className="text-[11px] text-muted-foreground/60 border-t border-border/40 pt-4 mt-auto">
+                <p className="text-[11px] text-muted-foreground/60 border-t border-border/40 pt-4">
                   Median rents from{" "}
                   <a href="https://streeteasy.com/blog/data-dashboard/" target="_blank" rel="noopener noreferrer" className="underline underline-offset-2 hover:text-muted-foreground">
                     StreetEasy
@@ -226,11 +278,79 @@ export default function ListingModal({
             )}
           </div>
 
-          {/* ── Bottom-right: View on StreetEasy ── */}
-          <div className="p-7 border-t border-l border-border/50 flex flex-col items-center justify-center gap-4">
-            <p className="text-sm text-muted-foreground text-center leading-relaxed">
-              View the full listing, additional photos, and contact the agent directly on StreetEasy.
-            </p>
+          {/* ── Bottom-right: Transit Access ── */}
+          <div className="p-7 border-t border-l border-border/50 flex flex-col gap-5">
+            <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+              Transit Access
+            </h3>
+
+            {transitBreakdown ? (
+              <>
+                <div className="flex items-center gap-4 rounded-xl border bg-muted/30 px-4 py-3">
+                  <div className={`flex h-14 w-14 shrink-0 flex-col items-center justify-center rounded-xl border ${transitScoreBgColor(transitBreakdown.transitScore)}`}>
+                    <span className="text-2xl font-bold leading-none">{transitBreakdown.transitScore}</span>
+                    <span className="text-[10px] font-medium leading-tight mt-0.5">/ 10</span>
+                  </div>
+                  <div>
+                    <p className="font-semibold text-sm">{transitScoreLabel(transitBreakdown.transitScore)}</p>
+                    <p className="text-xs text-muted-foreground mt-0.5">
+                      {transitBreakdown.distanceMiles} mi · ~{transitBreakdown.walkMinutes} min walk
+                    </p>
+                  </div>
+                </div>
+
+                <div className="space-y-2">
+                  <p className="text-xs font-medium text-muted-foreground">Nearest station</p>
+                  <div className="rounded-xl border bg-muted/30 px-4 py-3">
+                    <div className="flex items-start justify-between gap-2">
+                      <p className="text-sm font-semibold">{transitBreakdown.nearestStation.name}</p>
+                      <div className="flex flex-wrap gap-1 justify-end">
+                        {transitBreakdown.nearestStation.lines.slice(0, 5).map((line) => (
+                          <span key={line} className="inline-flex items-center justify-center h-5 w-5 rounded-full bg-primary/20 text-primary text-[10px] font-bold shrink-0">
+                            {line}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                    <p className="text-xs text-muted-foreground mt-1">
+                      {transitBreakdown.distanceMiles} mi away
+                    </p>
+                  </div>
+
+                  {transitBreakdown.nearbyStations.length > 1 && (
+                    <>
+                      <p className="text-xs font-medium text-muted-foreground pt-1">Also nearby</p>
+                      <div className="space-y-1.5">
+                        {transitBreakdown.nearbyStations.slice(1, 4).map(({ station, distanceMiles }) => (
+                          <div key={station.name + distanceMiles} className="flex items-center justify-between text-xs px-1">
+                            <span className="text-muted-foreground">{station.name}</span>
+                            <div className="flex items-center gap-1.5">
+                              <div className="flex gap-0.5">
+                                {station.lines.slice(0, 4).map((line) => (
+                                  <span key={line} className="inline-flex items-center justify-center h-4 w-4 rounded-full bg-primary/15 text-primary text-[9px] font-bold">
+                                    {line}
+                                  </span>
+                                ))}
+                              </div>
+                              <span className="text-muted-foreground/70 tabular-nums">{distanceMiles} mi</span>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </>
+                  )}
+                </div>
+
+                <p className="text-[11px] text-muted-foreground/60 border-t border-border/40 pt-3">
+                  Straight-line distance to MTA station entrances. Actual walk may vary.
+                </p>
+              </>
+            ) : (
+              <p className="text-sm text-muted-foreground italic">
+                Transit data unavailable — address could not be geocoded.
+              </p>
+            )}
+
             <a href={apt.url} target="_blank" rel="noopener noreferrer" className="w-full">
               <Button className="w-full" size="lg">
                 View on StreetEasy →
@@ -238,6 +358,7 @@ export default function ListingModal({
             </a>
           </div>
 
+        </div>
         </div>
       </DialogContent>
     </Dialog>

@@ -36,11 +36,29 @@ function initSchema(db: Database.Database) {
       sqft_num INTEGER,
       image_url TEXT,
       score REAL,
+      lat REAL,
+      lng REAL,
+      transit_score REAL,
+      available_date TEXT,
+      days_on_market INTEGER,
       cached_at INTEGER NOT NULL DEFAULT (unixepoch())
     );
 
     CREATE INDEX IF NOT EXISTS idx_neighborhood ON apartments(neighborhood);
     CREATE INDEX IF NOT EXISTS idx_cached_at ON apartments(cached_at);
+  `);
+
+  // Migrate existing tables that predate transit columns
+  const cols = (db.prepare("PRAGMA table_info(apartments)").all() as { name: string }[]).map(
+    (c) => c.name
+  );
+  if (!cols.includes("lat"))             db.exec("ALTER TABLE apartments ADD COLUMN lat REAL");
+  if (!cols.includes("lng"))             db.exec("ALTER TABLE apartments ADD COLUMN lng REAL");
+  if (!cols.includes("transit_score"))   db.exec("ALTER TABLE apartments ADD COLUMN transit_score REAL");
+  if (!cols.includes("available_date"))  db.exec("ALTER TABLE apartments ADD COLUMN available_date TEXT");
+  if (!cols.includes("days_on_market"))  db.exec("ALTER TABLE apartments ADD COLUMN days_on_market INTEGER");
+
+  db.exec(`
 
     CREATE TABLE IF NOT EXISTS neighborhood_stats (
       neighborhood TEXT PRIMARY KEY,
@@ -65,10 +83,15 @@ export interface Apartment {
   sqft_num: number | null;
   image_url: string | null;
   score: number | null;
+  lat: number | null;
+  lng: number | null;
+  transit_score: number | null;
+  available_date: string | null;
+  days_on_market: number | null;
   cached_at: number;
 }
 
-const CACHE_TTL_SECONDS = 10 * 60; // 10 minutes
+const CACHE_TTL_SECONDS = 30 * 60; // 30 minutes
 
 export function getCachedApartments(params: {
   neighborhood: string;
@@ -76,9 +99,10 @@ export function getCachedApartments(params: {
   baths?: string;
   minPrice?: number;
   maxPrice?: number;
+  force?: boolean;
 }): { apartments: Apartment[]; fromCache: boolean } {
   const db = getDb();
-  const { neighborhood, beds, minPrice, maxPrice } = params;
+  const { neighborhood, beds, minPrice, maxPrice, force } = params;
 
   const cutoff = Math.floor(Date.now() / 1000) - CACHE_TTL_SECONDS;
 
@@ -90,7 +114,7 @@ export function getCachedApartments(params: {
     )
     .get(neighborhood, cutoff) as { cnt: number };
 
-  const fromCache = freshCount.cnt > 0;
+  const fromCache = !force && freshCount.cnt > 0;
 
   // Build filter query (search-time filters only — beds/price from the original search form)
   const conditions: string[] = ["neighborhood = ?"];
@@ -128,10 +152,12 @@ export function saveApartments(apartments: Apartment[]) {
   const insert = db.prepare(`
     INSERT OR REPLACE INTO apartments
       (id, title, price, price_num, address, neighborhood, url,
-       bedrooms, bathrooms, sqft, sqft_num, image_url, score, cached_at)
+       bedrooms, bathrooms, sqft, sqft_num, image_url, score, lat, lng, transit_score,
+       available_date, days_on_market, cached_at)
     VALUES
       (@id, @title, @price, @price_num, @address, @neighborhood, @url,
-       @bedrooms, @bathrooms, @sqft, @sqft_num, @image_url, @score, @cached_at)
+       @bedrooms, @bathrooms, @sqft, @sqft_num, @image_url, @score, @lat, @lng, @transit_score,
+       @available_date, @days_on_market, @cached_at)
   `);
 
   const insertMany = db.transaction((apts: Apartment[]) => {

@@ -14,6 +14,8 @@ export interface ScrapedListing {
   sqft: string | null;
   sqft_num: number | null;
   image_url: string | null;
+  available_date: string | null;
+  days_on_market: number | null;
 }
 
 export interface ScrapeResult {
@@ -77,10 +79,10 @@ function pageUrl(baseUrl: string, page: number): string {
   return `${baseUrl}${sep}page=${page}`;
 }
 
-function generateId(title: string, address: string | null, price: string): string {
+function generateId(title: string, address: string | null, price: string, url: string): string {
   return crypto
     .createHash("md5")
-    .update(`${title}_${address ?? ""}_${price}`)
+    .update(`${title}_${address ?? ""}_${price}_${url}`)
     .digest("hex");
 }
 
@@ -247,8 +249,51 @@ function parseCards($: any, neighborhood: string): ScrapedListing[] {
         if (t) bathrooms = t;
       }
 
+      // Available date
+      let available_date: string | null = null;
+      for (const sel of [
+        '[data-testid="available-date"]',
+        '[data-testid="available"]',
+        '[class*="AvailableDate"]',
+        '[class*="available-date"]',
+        '[class*="availability"]',
+      ]) {
+        const text = $card.find(sel).first().text().trim();
+        if (text) { available_date = text; break; }
+      }
+      if (!available_date) {
+        const cardText = $card.text();
+        const m = cardText.match(/available\s+(now|immediately|(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s+\d{1,2}(?:,\s*\d{4})?|\d{1,2}\/\d{1,2}(?:\/\d{2,4})?)/i);
+        if (m) available_date = m[1].trim();
+      }
+
+      // Days on market
+      let days_on_market: number | null = null;
+      for (const sel of [
+        '[data-testid="days-on-market"]',
+        '[data-testid="dom"]',
+        '[class*="DaysOnMarket"]',
+        '[class*="daysOnMarket"]',
+        '[class*="days-on-market"]',
+      ]) {
+        const text = $card.find(sel).first().text().trim();
+        if (text) {
+          const n = text.match(/(\d+)/);
+          if (n) { days_on_market = parseInt(n[1], 10); break; }
+        }
+      }
+      if (days_on_market === null) {
+        const cardText = $card.text();
+        const dm = cardText.match(/(\d+)\s+days?\s+on\s+market/i);
+        if (dm) {
+          days_on_market = parseInt(dm[1], 10);
+        } else if (/\bnew\s+listing\b|\bjust\s+listed\b/i.test(cardText)) {
+          days_on_market = 0;
+        }
+      }
+
       listings.push({
-        id: generateId(title, address, price),
+        id: generateId(title, address, price, listingUrl),
         title,
         price,
         price_num: price !== "N/A" ? parsePrice(price) : null,
@@ -260,6 +305,8 @@ function parseCards($: any, neighborhood: string): ScrapedListing[] {
         sqft,
         sqft_num: sqft ? parseSqft(sqft) : null,
         image_url: imageUrl,
+        available_date,
+        days_on_market,
       });
     } catch {
       // skip malformed card

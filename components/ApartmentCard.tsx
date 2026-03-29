@@ -4,7 +4,7 @@ import { useState } from "react";
 import Image from "next/image";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { scoreBgColor, scoreLabel, getScoreBreakdown } from "@/lib/rating";
+import { scoreBgColor, scoreLabel, getScoreBreakdown, getCombinedScore } from "@/lib/rating";
 import ListingModal from "@/components/ListingModal";
 import type { Apartment } from "@/lib/db";
 
@@ -15,13 +15,15 @@ interface ApartmentCardProps {
 export default function ApartmentCard({ apartment: apt }: ApartmentCardProps) {
   const [modalOpen, setModalOpen] = useState(false);
 
-  const score = apt.score;
-  const hasScore = score !== null && score !== undefined;
-  const breakdown = hasScore && apt.neighborhood
+  const combinedScore = getCombinedScore(apt.score ?? null, apt.transit_score ?? null);
+  const displayScore = combinedScore ?? apt.score;
+  const hasDisplayScore = displayScore !== null && displayScore !== undefined;
+  const breakdown = hasDisplayScore && apt.neighborhood
     ? getScoreBreakdown({
         price_num: apt.price_num,
         sqft_num: apt.sqft_num,
         neighborhood: apt.neighborhood,
+        transit_score: apt.transit_score,
       })
     : null;
 
@@ -60,17 +62,6 @@ export default function ApartmentCard({ apartment: apt }: ApartmentCardProps) {
               </div>
             )}
 
-            {/* Score badge — top right */}
-            {hasScore && (
-              <div className="absolute top-2 right-2">
-                <div className={`flex flex-col items-center rounded-xl border px-2.5 py-1.5 ${scoreBgColor(score!)}`}>
-                  <span className="text-lg font-bold leading-none">{score}</span>
-                  <span className="text-[10px] font-medium leading-tight mt-0.5">
-                    {scoreLabel(score!)}
-                  </span>
-                </div>
-              </div>
-            )}
           </div>
 
           <CardContent className="p-4 space-y-3">
@@ -101,6 +92,17 @@ export default function ApartmentCard({ apartment: apt }: ApartmentCardProps) {
                 <span className="flex items-center gap-1"><SqftIcon />{apt.sqft}</span>
               )}
             </div>
+
+            {hasDisplayScore && (
+              <div className="flex gap-3">
+                <div className={`inline-flex items-center gap-1.5 rounded-xl border px-2.5 py-1 text-xs font-semibold ${scoreBgColor(displayScore!)}`}>
+                  <DollarIcon />
+                  {apt.transit_score !== null && apt.transit_score !== undefined && <WalkingIcon />}
+                  <span>{displayScore}</span>
+                  <span className="font-normal text-[10px]">{scoreLabel(displayScore!)}</span>
+                </div>
+              </div>
+            )}
           </CardContent>
         </Card>
       </div>
@@ -138,6 +140,36 @@ function SqftIcon() {
     <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5}
         d="M4 4h6M4 4v6M20 20h-6M20 20v-6M4 20l16-16" />
+    </svg>
+  );
+}
+
+function DollarIcon() {
+  return (
+    <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+        d="M12 2v20M17 5H9.5a3.5 3.5 0 000 7h5a3.5 3.5 0 010 7H6" />
+    </svg>
+  );
+}
+
+function WalkingIcon() {
+  return (
+    <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+      {/* Head */}
+      <circle cx="12" cy="4" r="1.8" strokeWidth={1.5} />
+      {/* Torso leaning forward */}
+      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5}
+        d="M12 6.5l-1 5" />
+      {/* Arms: back arm forward, front arm back */}
+      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5}
+        d="M11 9l-2.5 2M11 9l2 1.5" />
+      {/* Legs: striding */}
+      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5}
+        d="M11 11.5l-2 4.5M11 11.5l2.5 4" />
+      {/* Feet */}
+      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5}
+        d="M9 16l-1.5 1.5M13.5 15.5l1.5 1" />
     </svg>
   );
 }

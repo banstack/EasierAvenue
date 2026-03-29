@@ -57,10 +57,10 @@ export function scoreColor(score: number): string {
 }
 
 export function scoreBgColor(score: number): string {
-  if (score >= 8) return "bg-green-600/85 border-green-600/60 text-white";
-  if (score >= 6) return "bg-blue-600/85 border-blue-600/60 text-white";
-  if (score >= 4) return "bg-yellow-500/85 border-yellow-500/60 text-white";
-  return "bg-red-600/85 border-red-600/60 text-white";
+  if (score >= 8) return "bg-green-950/80 border-green-800/60 text-green-300";
+  if (score >= 6) return "bg-blue-950/80 border-blue-800/60 text-blue-300";
+  if (score >= 4) return "bg-yellow-950/80 border-yellow-800/60 text-yellow-300";
+  return "bg-red-950/80 border-red-800/60 text-red-300";
 }
 
 export function scoreLabel(score: number): string {
@@ -71,7 +71,10 @@ export function scoreLabel(score: number): string {
 }
 
 export interface ScoreBreakdown {
-  finalScore: number;
+  finalScore: number;         // combined score (affordability + transit averaged)
+  combinedScore: number;      // same as finalScore, explicit alias
+  affordabilityScore: number; // affordability-only sub-score
+  transitScore: number | null;
   neighborhoodMedian: number;
   priceComponent: {
     aptPrice: number;
@@ -88,8 +91,19 @@ export interface ScoreBreakdown {
   } | null;
 }
 
+export function getCombinedScore(
+  affordability: number | null,
+  transit: number | null
+): number | null {
+  if (affordability === null) return null;
+  if (transit === null) return affordability;
+  return Math.round(((affordability + transit) / 2) * 10) / 10;
+}
+
 export function getScoreBreakdown(
-  apt: Pick<ScrapedListing, "price_num" | "sqft_num" | "neighborhood">
+  apt: Pick<ScrapedListing, "price_num" | "sqft_num" | "neighborhood"> & {
+    transit_score?: number | null;
+  }
 ): ScoreBreakdown | null {
   if (!apt.price_num || !apt.neighborhood) return null;
 
@@ -112,13 +126,20 @@ export function getScoreBreakdown(
     };
   }
 
-  const finalScore =
+  const affordabilityScore = Math.min(10, Math.max(1,
     sqftComponent !== null
       ? Math.round(((priceScore + sqftComponent.score) / 2) * 10) / 10
-      : priceScore;
+      : priceScore
+  ));
+
+  const transitScore = apt.transit_score ?? null;
+  const combinedScore = getCombinedScore(affordabilityScore, transitScore) ?? affordabilityScore;
 
   return {
-    finalScore: Math.min(10, Math.max(1, finalScore)),
+    finalScore: combinedScore,
+    combinedScore,
+    affordabilityScore,
+    transitScore,
     neighborhoodMedian: medianRent,
     priceComponent: {
       aptPrice: apt.price_num,
