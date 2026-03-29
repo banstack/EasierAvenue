@@ -55,8 +55,10 @@ function initSchema(db: Database.Database) {
   if (!cols.includes("lat"))             db.exec("ALTER TABLE apartments ADD COLUMN lat REAL");
   if (!cols.includes("lng"))             db.exec("ALTER TABLE apartments ADD COLUMN lng REAL");
   if (!cols.includes("transit_score"))   db.exec("ALTER TABLE apartments ADD COLUMN transit_score REAL");
-  if (!cols.includes("available_date"))  db.exec("ALTER TABLE apartments ADD COLUMN available_date TEXT");
-  if (!cols.includes("days_on_market"))  db.exec("ALTER TABLE apartments ADD COLUMN days_on_market INTEGER");
+  if (!cols.includes("net_effective_price")) db.exec("ALTER TABLE apartments ADD COLUMN net_effective_price INTEGER");
+  if (!cols.includes("months_free"))         db.exec("ALTER TABLE apartments ADD COLUMN months_free REAL");
+  if (!cols.includes("lease_term"))          db.exec("ALTER TABLE apartments ADD COLUMN lease_term TEXT");
+  if (!cols.includes("price_reduction"))     db.exec("ALTER TABLE apartments ADD COLUMN price_reduction INTEGER");
 
   db.exec(`
 
@@ -86,8 +88,10 @@ export interface Apartment {
   lat: number | null;
   lng: number | null;
   transit_score: number | null;
-  available_date: string | null;
-  days_on_market: number | null;
+  net_effective_price: number | null;
+  months_free: number | null;
+  lease_term: string | null;
+  price_reduction: number | null;
   cached_at: number;
 }
 
@@ -153,11 +157,11 @@ export function saveApartments(apartments: Apartment[]) {
     INSERT OR REPLACE INTO apartments
       (id, title, price, price_num, address, neighborhood, url,
        bedrooms, bathrooms, sqft, sqft_num, image_url, score, lat, lng, transit_score,
-       available_date, days_on_market, cached_at)
+       net_effective_price, months_free, lease_term, price_reduction, cached_at)
     VALUES
       (@id, @title, @price, @price_num, @address, @neighborhood, @url,
        @bedrooms, @bathrooms, @sqft, @sqft_num, @image_url, @score, @lat, @lng, @transit_score,
-       @available_date, @days_on_market, @cached_at)
+       @net_effective_price, @months_free, @lease_term, @price_reduction, @cached_at)
   `);
 
   const insertMany = db.transaction((apts: Apartment[]) => {

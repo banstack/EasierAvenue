@@ -32,6 +32,7 @@ interface CompleteResult {
   cachedAt?: number;
 }
 
+
 function formatRelativeTime(unixSeconds: number): string {
   const mins = Math.floor((Date.now() / 1000 - unixSeconds) / 60);
   if (mins < 1) return "just now";

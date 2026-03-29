@@ -14,8 +14,10 @@ export interface ScrapedListing {
   sqft: string | null;
   sqft_num: number | null;
   image_url: string | null;
-  available_date: string | null;
-  days_on_market: number | null;
+  net_effective_price: number | null;
+  months_free: number | null;
+  lease_term: string | null;
+  price_reduction: number | null;
 }
 
 export interface ScrapeResult {
@@ -249,48 +251,29 @@ function parseCards($: any, neighborhood: string): ScrapedListing[] {
         if (t) bathrooms = t;
       }
 
-      // Available date
-      let available_date: string | null = null;
-      for (const sel of [
-        '[data-testid="available-date"]',
-        '[data-testid="available"]',
-        '[class*="AvailableDate"]',
-        '[class*="available-date"]',
-        '[class*="availability"]',
-      ]) {
-        const text = $card.find(sel).first().text().trim();
-        if (text) { available_date = text; break; }
-      }
-      if (!available_date) {
-        const cardText = $card.text();
-        const m = cardText.match(/available\s+(now|immediately|(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s+\d{1,2}(?:,\s*\d{4})?|\d{1,2}\/\d{1,2}(?:\/\d{2,4})?)/i);
-        if (m) available_date = m[1].trim();
+      // Concessions / net effective rent
+      let net_effective_price: number | null = null;
+      let months_free: number | null = null;
+      let lease_term: string | null = null;
+
+      const $concessions = $card.find(".PriceInfo-module__priceDetailsContainer___cegQf");
+      if ($concessions.length) {
+        const text = $concessions.text();
+        const netMatch = text.match(/\$([\d,]+)\s+net\s+effective/i);
+        if (netMatch) net_effective_price = parseInt(netMatch[1].replace(/,/g, ""), 10);
+        const monthsMatch = text.match(/([\d.]+)\s+months?\s+free/i);
+        if (monthsMatch) months_free = parseFloat(monthsMatch[1]);
+        const leaseMatch = text.match(/(\d+)-month\s+lease/i);
+        if (leaseMatch) lease_term = `${leaseMatch[1]}-month lease`;
       }
 
-      // Days on market
-      let days_on_market: number | null = null;
-      for (const sel of [
-        '[data-testid="days-on-market"]',
-        '[data-testid="dom"]',
-        '[class*="DaysOnMarket"]',
-        '[class*="daysOnMarket"]',
-        '[class*="days-on-market"]',
-      ]) {
-        const text = $card.find(sel).first().text().trim();
-        if (text) {
-          const n = text.match(/(\d+)/);
-          if (n) { days_on_market = parseInt(n[1], 10); break; }
-        }
-      }
-      if (days_on_market === null) {
-        const cardText = $card.text();
-        const dm = cardText.match(/(\d+)\s+days?\s+on\s+market/i);
-        if (dm) {
-          days_on_market = parseInt(dm[1], 10);
-        } else if (/\bnew\s+listing\b|\bjust\s+listed\b/i.test(cardText)) {
-          days_on_market = 0;
-        }
-      }
+      // Price reduction tag (down-arrow icon + $ amount next to price)
+      let price_reduction: number | null = null;
+      $card.find(".PriceInfo-module__priceInfoTag___pVv0Z [data-testid=\"tag-text\"]").each((_: unknown, el: unknown) => {
+        const text = $(el as Parameters<typeof $>[0]).text().trim();
+        const match = text.match(/^\$([\d,]+)$/);
+        if (match) { price_reduction = parseInt(match[1].replace(/,/g, ""), 10); return false; }
+      });
 
       listings.push({
         id: generateId(title, address, price, listingUrl),
@@ -305,8 +288,10 @@ function parseCards($: any, neighborhood: string): ScrapedListing[] {
         sqft,
         sqft_num: sqft ? parseSqft(sqft) : null,
         image_url: imageUrl,
-        available_date,
-        days_on_market,
+        net_effective_price,
+        months_free,
+        lease_term,
+        price_reduction,
       });
     } catch {
       // skip malformed card

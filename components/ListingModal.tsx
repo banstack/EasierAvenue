@@ -150,18 +150,28 @@ export default function ListingModal({
                   <p className="text-sm font-semibold">{apt.sqft}</p>
                 </div>
               )}
-              {apt.available_date && (
+              {apt.net_effective_price && (
                 <div className="rounded-xl border bg-muted/30 px-4 py-3">
-                  <p className="text-[11px] text-muted-foreground mb-1">Available</p>
-                  <p className="text-sm font-semibold capitalize">{apt.available_date}</p>
+                  <p className="text-[11px] text-muted-foreground mb-1">Net effective</p>
+                  <p className="text-sm font-semibold">${apt.net_effective_price.toLocaleString()}/mo</p>
                 </div>
               )}
-              {apt.days_on_market !== null && apt.days_on_market !== undefined && (
+              {apt.months_free != null && (
                 <div className="rounded-xl border bg-muted/30 px-4 py-3">
-                  <p className="text-[11px] text-muted-foreground mb-1">On market</p>
-                  <p className="text-sm font-semibold">
-                    {apt.days_on_market === 0 ? "New listing" : `${apt.days_on_market} day${apt.days_on_market !== 1 ? "s" : ""}`}
-                  </p>
+                  <p className="text-[11px] text-muted-foreground mb-1">Concession</p>
+                  <p className="text-sm font-semibold">{apt.months_free} mo free</p>
+                </div>
+              )}
+              {apt.lease_term && (
+                <div className="rounded-xl border bg-muted/30 px-4 py-3">
+                  <p className="text-[11px] text-muted-foreground mb-1">Lease</p>
+                  <p className="text-sm font-semibold capitalize">{apt.lease_term}</p>
+                </div>
+              )}
+              {apt.price_reduction != null && (
+                <div className="rounded-xl border border-green-800/40 bg-green-950/40 px-4 py-3">
+                  <p className="text-[11px] text-green-400/80 mb-1">Price reduced</p>
+                  <p className="text-sm font-semibold text-green-300">−${apt.price_reduction.toLocaleString()}/mo</p>
                 </div>
               )}
             </div>
