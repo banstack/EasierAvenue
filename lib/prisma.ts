@@ -1,11 +1,11 @@
 import { PrismaClient } from "@/lib/generated/prisma";
 import { PrismaPg } from "@prisma/adapter-pg";
 
-const globalForPrisma = globalThis as unknown as { prisma?: PrismaClient };
+let _client: PrismaClient | undefined;
 
-function createClient() {
-  // Prefer the private internal URL on Railway (no SSL hop needed).
-  // Fall back to the public DATABASE_URL with SSL for external access.
+function getClient(): PrismaClient {
+  if (_client) return _client;
+
   const privateUrl = process.env.DATABASE_PRIVATE_URL;
   const publicUrl = process.env.DATABASE_URL;
   const connectionString = privateUrl ?? publicUrl;
@@ -15,13 +15,17 @@ function createClient() {
   }
 
   const ssl = !privateUrl ? { rejectUnauthorized: false } : undefined;
-
   const adapter = new PrismaPg({ connectionString, ssl });
-  return new PrismaClient({ adapter });
+  _client = new PrismaClient({ adapter });
+  return _client;
 }
 
-export const prisma = globalForPrisma.prisma ?? createClient();
-
-if (process.env.NODE_ENV !== "production") {
-  globalForPrisma.prisma = prisma;
-}
+// Proxy defers client initialization until the first actual query,
+// so importing this module during Next.js build doesn't require a DB connection.
+export const prisma = new Proxy({} as PrismaClient, {
+  get(_, prop, receiver) {
+    const client = getClient();
+    const value = Reflect.get(client, prop, receiver);
+    return typeof value === "function" ? value.bind(client) : value;
+  },
+});
