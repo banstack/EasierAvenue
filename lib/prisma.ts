@@ -1,11 +1,17 @@
-import { PrismaClient } from "@prisma/client";
+import { PrismaClient } from "@/lib/generated/prisma";
 import { PrismaPg } from "@prisma/adapter-pg";
 
 const globalForPrisma = globalThis as unknown as { prisma?: PrismaClient };
 
 function createClient() {
+  const connectionString = process.env.DATABASE_URL;
+  if (!connectionString) {
+    throw new Error("DATABASE_URL environment variable is not set");
+  }
   const adapter = new PrismaPg({
-    connectionString: process.env.DATABASE_URL!,
+    connectionString,
+    // Railway PostgreSQL requires SSL in production
+    ssl: process.env.NODE_ENV === "production" ? { rejectUnauthorized: false } : undefined,
   });
   return new PrismaClient({ adapter });
 }
