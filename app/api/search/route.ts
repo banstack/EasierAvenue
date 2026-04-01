@@ -6,6 +6,7 @@ import { buildStreetEasyUrl } from "@/data/neighborhoods";
 import { batchGeocode } from "@/lib/geocode";
 import { getTransitBreakdown } from "@/lib/transit";
 
+export const dynamic = "force-dynamic";
 export const maxDuration = 60;
 
 export interface SearchParams {
