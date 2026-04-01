@@ -1,75 +1,5 @@
-import Database from "better-sqlite3";
-import path from "path";
-import fs from "fs";
-
-const DB_DIR = process.env.DB_DIR || path.join(process.cwd(), "data");
-const DB_PATH = path.join(DB_DIR, "apartments.db");
-
-let _db: Database.Database | null = null;
-
-function getDb(): Database.Database {
-  if (_db) return _db;
-
-  if (!fs.existsSync(DB_DIR)) {
-    fs.mkdirSync(DB_DIR, { recursive: true });
-  }
-
-  _db = new Database(DB_PATH);
-  _db.pragma("journal_mode = WAL");
-  initSchema(_db);
-  return _db;
-}
-
-function initSchema(db: Database.Database) {
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS apartments (
-      id TEXT PRIMARY KEY,
-      title TEXT NOT NULL,
-      price TEXT NOT NULL,
-      price_num INTEGER,
-      address TEXT,
-      neighborhood TEXT,
-      url TEXT NOT NULL,
-      bedrooms TEXT,
-      bathrooms TEXT,
-      sqft TEXT,
-      sqft_num INTEGER,
-      image_url TEXT,
-      score REAL,
-      lat REAL,
-      lng REAL,
-      transit_score REAL,
-      available_date TEXT,
-      days_on_market INTEGER,
-      cached_at INTEGER NOT NULL DEFAULT (unixepoch())
-    );
-
-    CREATE INDEX IF NOT EXISTS idx_neighborhood ON apartments(neighborhood);
-    CREATE INDEX IF NOT EXISTS idx_cached_at ON apartments(cached_at);
-  `);
-
-  // Migrate existing tables that predate transit columns
-  const cols = (db.prepare("PRAGMA table_info(apartments)").all() as { name: string }[]).map(
-    (c) => c.name
-  );
-  if (!cols.includes("lat"))             db.exec("ALTER TABLE apartments ADD COLUMN lat REAL");
-  if (!cols.includes("lng"))             db.exec("ALTER TABLE apartments ADD COLUMN lng REAL");
-  if (!cols.includes("transit_score"))   db.exec("ALTER TABLE apartments ADD COLUMN transit_score REAL");
-  if (!cols.includes("net_effective_price")) db.exec("ALTER TABLE apartments ADD COLUMN net_effective_price INTEGER");
-  if (!cols.includes("months_free"))         db.exec("ALTER TABLE apartments ADD COLUMN months_free REAL");
-  if (!cols.includes("lease_term"))          db.exec("ALTER TABLE apartments ADD COLUMN lease_term TEXT");
-  if (!cols.includes("price_reduction"))     db.exec("ALTER TABLE apartments ADD COLUMN price_reduction INTEGER");
-
-  db.exec(`
-
-    CREATE TABLE IF NOT EXISTS neighborhood_stats (
-      neighborhood TEXT PRIMARY KEY,
-      median_price INTEGER NOT NULL,
-      avg_price_per_sqft REAL,
-      updated_at INTEGER NOT NULL DEFAULT (unixepoch())
-    );
-  `);
-}
+import { Prisma } from "@prisma/client";
+import { prisma } from "@/lib/prisma";
 
 export interface Apartment {
   id: string;
@@ -92,104 +22,187 @@ export interface Apartment {
   months_free: number | null;
   lease_term: string | null;
   price_reduction: number | null;
-  cached_at: number;
+  first_seen_at: Date;
+  last_seen_at: Date;
 }
 
-const CACHE_TTL_SECONDS = 30 * 60; // 30 minutes
+const CACHE_TTL_MS = 30 * 60 * 1000; // 30 minutes
 
-export function getCachedApartments(params: {
+function toDomain(row: {
+  id: string;
+  title: string;
+  price: string;
+  price_num: bigint | null;
+  address: string | null;
+  neighborhood: string | null;
+  url: string;
+  bedrooms: string | null;
+  bathrooms: string | null;
+  sqft: string | null;
+  sqft_num: bigint | null;
+  image_url: string | null;
+  score: number | null;
+  lat: number | null;
+  lng: number | null;
+  transit_score: number | null;
+  net_effective_price: bigint | null;
+  months_free: number | null;
+  lease_term: string | null;
+  price_reduction: bigint | null;
+  first_seen_at: Date;
+  last_seen_at: Date;
+}): Apartment {
+  return {
+    ...row,
+    price_num: row.price_num !== null ? Number(row.price_num) : null,
+    sqft_num: row.sqft_num !== null ? Number(row.sqft_num) : null,
+    net_effective_price: row.net_effective_price !== null ? Number(row.net_effective_price) : null,
+    price_reduction: row.price_reduction !== null ? Number(row.price_reduction) : null,
+  };
+}
+
+export async function getCachedApartments(params: {
   neighborhood: string;
   beds?: string;
   baths?: string;
   minPrice?: number;
   maxPrice?: number;
   force?: boolean;
-}): { apartments: Apartment[]; fromCache: boolean } {
-  const db = getDb();
+}): Promise<{ apartments: Apartment[]; fromCache: boolean }> {
   const { neighborhood, beds, minPrice, maxPrice, force } = params;
 
-  const cutoff = Math.floor(Date.now() / 1000) - CACHE_TTL_SECONDS;
+  const cutoff = new Date(Date.now() - CACHE_TTL_MS);
 
-  // Check if we have fresh data for this search
-  const freshCount = db
-    .prepare(
-      `SELECT COUNT(*) as cnt FROM apartments
-       WHERE neighborhood = ? AND cached_at > ?`
-    )
-    .get(neighborhood, cutoff) as { cnt: number };
+  const freshCount = await prisma.apartment.count({
+    where: { neighborhood, last_seen_at: { gt: cutoff } },
+  });
 
-  const fromCache = !force && freshCount.cnt > 0;
+  const fromCache = !force && freshCount > 0;
 
-  // Build filter query (search-time filters only — beds/price from the original search form)
-  const conditions: string[] = ["neighborhood = ?"];
-  const values: (string | number)[] = [neighborhood];
+  // Build where clause
+  const where: Prisma.ApartmentWhereInput = { neighborhood };
 
+  // Beds are post-filtered in application code — Prisma can't do CAST(REPLACE(...))
+
+  if (minPrice) where.price_num = { gte: BigInt(minPrice) };
+  if (maxPrice) where.price_num = { ...((where.price_num ?? {}) as object), lte: BigInt(maxPrice) };
+
+  const rows = await prisma.apartment.findMany({
+    where,
+    orderBy: [{ score: "desc" }, { last_seen_at: "desc" }],
+  });
+
+  let apartments = rows.map(toDomain);
+
+  // Post-filter beds (REPLACE logic can't be expressed in Prisma where clause)
   if (beds && beds !== "any") {
-    const bedsNum = beds === "studio" ? 0 : parseInt(beds);
+    const bedsNum = beds === "studio" ? 0 : parseInt(beds, 10);
     if (!isNaN(bedsNum)) {
-      conditions.push("CAST(REPLACE(REPLACE(bedrooms, ' bed', ''), 'Studio', '0') AS INTEGER) = ?");
-      values.push(bedsNum);
+      apartments = apartments.filter((a) => {
+        if (!a.bedrooms) return false;
+        const n = parseInt(a.bedrooms.replace(" bed", "").replace("Studio", "0"), 10);
+        return n === bedsNum;
+      });
     }
   }
-
-  if (minPrice) {
-    conditions.push("price_num >= ?");
-    values.push(minPrice);
-  }
-
-  if (maxPrice) {
-    conditions.push("price_num <= ?");
-    values.push(maxPrice);
-  }
-
-  const where = conditions.join(" AND ");
-
-  const apartments = db
-    .prepare(`SELECT * FROM apartments WHERE ${where} ORDER BY score DESC NULLS LAST, cached_at DESC`)
-    .all(...values) as Apartment[];
 
   return { apartments, fromCache };
 }
 
-export function saveApartments(apartments: Apartment[]) {
-  const db = getDb();
-  const insert = db.prepare(`
-    INSERT OR REPLACE INTO apartments
-      (id, title, price, price_num, address, neighborhood, url,
-       bedrooms, bathrooms, sqft, sqft_num, image_url, score, lat, lng, transit_score,
-       net_effective_price, months_free, lease_term, price_reduction, cached_at)
-    VALUES
-      (@id, @title, @price, @price_num, @address, @neighborhood, @url,
-       @bedrooms, @bathrooms, @sqft, @sqft_num, @image_url, @score, @lat, @lng, @transit_score,
-       @net_effective_price, @months_free, @lease_term, @price_reduction, @cached_at)
-  `);
-
-  const insertMany = db.transaction((apts: Apartment[]) => {
-    for (const apt of apts) {
-      insert.run(apt);
-    }
-  });
-
-  insertMany(apartments);
+export async function saveApartments(apartments: Apartment[]): Promise<void> {
+  await Promise.all(
+    apartments.map((apt) =>
+      prisma.apartment.upsert({
+        where: { id: apt.id },
+        create: {
+          id: apt.id,
+          title: apt.title,
+          price: apt.price,
+          price_num: apt.price_num !== null ? BigInt(apt.price_num) : null,
+          address: apt.address,
+          neighborhood: apt.neighborhood,
+          url: apt.url,
+          bedrooms: apt.bedrooms,
+          bathrooms: apt.bathrooms,
+          sqft: apt.sqft,
+          sqft_num: apt.sqft_num !== null ? BigInt(apt.sqft_num) : null,
+          image_url: apt.image_url,
+          score: apt.score,
+          lat: apt.lat,
+          lng: apt.lng,
+          transit_score: apt.transit_score,
+          net_effective_price: apt.net_effective_price !== null ? BigInt(apt.net_effective_price) : null,
+          months_free: apt.months_free,
+          lease_term: apt.lease_term,
+          price_reduction: apt.price_reduction !== null ? BigInt(apt.price_reduction) : null,
+          first_seen_at: apt.first_seen_at,
+          last_seen_at: apt.last_seen_at,
+        },
+        update: {
+          title: apt.title,
+          price: apt.price,
+          price_num: apt.price_num !== null ? BigInt(apt.price_num) : null,
+          address: apt.address,
+          url: apt.url,
+          bedrooms: apt.bedrooms,
+          bathrooms: apt.bathrooms,
+          sqft: apt.sqft,
+          sqft_num: apt.sqft_num !== null ? BigInt(apt.sqft_num) : null,
+          image_url: apt.image_url,
+          score: apt.score,
+          lat: apt.lat,
+          lng: apt.lng,
+          transit_score: apt.transit_score,
+          net_effective_price: apt.net_effective_price !== null ? BigInt(apt.net_effective_price) : null,
+          months_free: apt.months_free,
+          lease_term: apt.lease_term,
+          price_reduction: apt.price_reduction !== null ? BigInt(apt.price_reduction) : null,
+          last_seen_at: apt.last_seen_at, // preserve first_seen_at on updates
+        },
+      })
+    )
+  );
 }
 
-export function getNeighborhoodStats(
+export async function getNeighborhoodStats(
   neighborhood: string
-): { median_price: number; avg_price_per_sqft: number | null } | null {
-  const db = getDb();
-  return db
-    .prepare("SELECT median_price, avg_price_per_sqft FROM neighborhood_stats WHERE neighborhood = ?")
-    .get(neighborhood) as { median_price: number; avg_price_per_sqft: number | null } | null;
+): Promise<{ median_price: number; avg_price_per_sqft: number | null } | null> {
+  const row = await prisma.neighborhoodStat.findUnique({ where: { neighborhood } });
+  if (!row) return null;
+  return {
+    median_price: Number(row.median_price),
+    avg_price_per_sqft: row.avg_price_per_sqft,
+  };
 }
 
-export function upsertNeighborhoodStats(
+export async function upsertNeighborhoodStats(
   neighborhood: string,
   median_price: number,
   avg_price_per_sqft: number | null
-) {
-  const db = getDb();
-  db.prepare(`
-    INSERT OR REPLACE INTO neighborhood_stats (neighborhood, median_price, avg_price_per_sqft, updated_at)
-    VALUES (?, ?, ?, unixepoch())
-  `).run(neighborhood, median_price, avg_price_per_sqft);
+): Promise<void> {
+  await prisma.neighborhoodStat.upsert({
+    where: { neighborhood },
+    create: { neighborhood, median_price: BigInt(median_price), avg_price_per_sqft },
+    update: { median_price: BigInt(median_price), avg_price_per_sqft, updated_at: new Date() },
+  });
+}
+
+// --- Scrape lock helpers ---
+
+/**
+ * Try to acquire a scrape lock for a neighborhood.
+ * Returns true if the lock was acquired, false if another process holds it.
+ */
+export async function acquireScrapeLock(neighborhood: string): Promise<boolean> {
+  try {
+    await prisma.scrapeLock.create({ data: { neighborhood } });
+    return true;
+  } catch {
+    // Unique constraint violation — someone else holds the lock
+    return false;
+  }
+}
+
+export async function releaseScrapeLock(neighborhood: string): Promise<void> {
+  await prisma.scrapeLock.deleteMany({ where: { neighborhood } });
 }

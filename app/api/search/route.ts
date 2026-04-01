@@ -1,5 +1,5 @@
 import { NextRequest } from "next/server";
-import { getCachedApartments, saveApartments } from "@/lib/db";
+import { getCachedApartments, saveApartments, acquireScrapeLock, releaseScrapeLock } from "@/lib/db";
 import { scrapeListings, type ScrapedListing } from "@/lib/scraper";
 import { scoreBatch } from "@/lib/rating";
 import { buildStreetEasyUrl } from "@/data/neighborhoods";
@@ -24,14 +24,15 @@ function sse(data: object): Uint8Array {
 }
 
 function toApartmentShape(listings: ScrapedListing[], score: (number | null)[]) {
-  const now = Math.floor(Date.now() / 1000);
+  const now = new Date();
   return listings.map((apt, i) => ({
     ...apt,
     score: score[i],
     lat: null,
     lng: null,
     transit_score: null,
-    cached_at: now,
+    first_seen_at: now,
+    last_seen_at: now,
   }));
 }
 
@@ -84,10 +85,10 @@ export async function POST(req: NextRequest) {
   }
 
   // --- Cache hit: return plain JSON with all apartments ---
-  const cached = getCachedApartments({ neighborhood, beds, baths, minPrice, maxPrice, force });
+  const cached = await getCachedApartments({ neighborhood, beds, baths, minPrice, maxPrice, force });
 
   if (cached.fromCache && cached.apartments.length > 0) {
-    const cachedAt = Math.max(...cached.apartments.map((a) => a.cached_at));
+    const cachedAt = Math.max(...cached.apartments.map((a) => a.last_seen_at.getTime() / 1000));
     return new Response(
       JSON.stringify({
         type: "complete",
@@ -100,7 +101,7 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  // --- Cache miss: stream SSE ---
+  // --- Cache miss: acquire scrape lock, stream SSE ---
   const url = buildStreetEasyUrl({ neighborhood, beds, minPrice, maxPrice });
   const allScraped: ScrapedListing[] = [];
 
@@ -108,7 +109,6 @@ export async function POST(req: NextRequest) {
     async start(controller) {
       let closed = false;
 
-      // Safe enqueue — silently drops writes after the client disconnects
       function send(data: object) {
         if (closed) return;
         try {
@@ -124,9 +124,51 @@ export async function POST(req: NextRequest) {
         try { controller.close(); } catch { /* already closed */ }
       }
 
+      // Try to acquire scrape lock. If another request is already scraping,
+      // poll for fresh cache for up to 90s before falling through.
+      const lockAcquired = await acquireScrapeLock(neighborhood);
+
+      if (!lockAcquired) {
+        // Poll for fresh cache every 2s, up to 90s
+        const deadline = Date.now() + 90_000;
+        while (Date.now() < deadline) {
+          await new Promise((r) => setTimeout(r, 2_000));
+          const polled = await getCachedApartments({ neighborhood, beds, baths, minPrice, maxPrice });
+          if (polled.fromCache && polled.apartments.length > 0) {
+            const cachedAt = Math.max(...polled.apartments.map((a) => a.last_seen_at.getTime() / 1000));
+            send({
+              type: "complete",
+              apartments: polled.apartments,
+              total: polled.apartments.length,
+              fromCache: true,
+              cachedAt,
+            });
+            close();
+            return;
+          }
+        }
+        // Timed out waiting — serve whatever stale data exists
+        const stale = await getCachedApartments({ neighborhood, beds, baths, minPrice, maxPrice });
+        if (stale.apartments.length > 0) {
+          const staleAt = Math.max(...stale.apartments.map((a) => a.last_seen_at.getTime() / 1000));
+          send({
+            type: "complete",
+            apartments: stale.apartments,
+            total: stale.apartments.length,
+            fromCache: true,
+            stale: true,
+            cachedAt: staleAt,
+          });
+        } else {
+          send({ type: "error", message: "Another scrape is in progress. Try again shortly." });
+        }
+        close();
+        return;
+      }
+
       try {
         await scrapeListings(url, neighborhood, 15, (pageNum, totalPages, pageListings) => {
-          if (closed) return; // client disconnected — stop processing callbacks
+          if (closed) return;
           allScraped.push(...pageListings);
 
           if (pageNum === 1) {
@@ -138,12 +180,11 @@ export async function POST(req: NextRequest) {
           }
         });
       } catch (err) {
-        // Only log if it's a real scrape error, not a closed-controller error
         if (!closed) {
           console.error("Scrape error:", err);
-          const stale = getCachedApartments({ neighborhood, beds, baths, minPrice, maxPrice });
+          const stale = await getCachedApartments({ neighborhood, beds, baths, minPrice, maxPrice });
           if (stale.apartments.length > 0) {
-            const staleAt = Math.max(...stale.apartments.map((a) => a.cached_at));
+            const staleAt = Math.max(...stale.apartments.map((a) => a.last_seen_at.getTime() / 1000));
             send({
               type: "complete",
               apartments: stale.apartments,
@@ -156,19 +197,21 @@ export async function POST(req: NextRequest) {
             send({ type: "error", message: "Failed to fetch listings. Try again shortly." });
           }
         }
+        await releaseScrapeLock(neighborhood);
         close();
         return;
       }
 
       // Score affordability
       const scored = scoreBatch(allScraped);
-      const now = Math.floor(Date.now() / 1000);
+      const now = new Date();
       const withTimestamp = scored.map((apt) => ({
         ...apt,
         lat: null as number | null,
         lng: null as number | null,
         transit_score: null as number | null,
-        cached_at: now,
+        first_seen_at: now,
+        last_seen_at: now,
       }));
 
       // Batch-geocode all listings in one Census API call, then score transit
@@ -177,12 +220,12 @@ export async function POST(req: NextRequest) {
       const geocoded = withTransit.filter((a) => a.transit_score !== null).length;
       console.log(`Transit scores: ${geocoded}/${withTimestamp.length} listings scored`);
 
-      saveApartments(withTransit);
+      await saveApartments(withTransit);
+      await releaseScrapeLock(neighborhood);
 
-      if (closed) return; // client disconnected before we finished
+      if (closed) return;
 
-      // Return all results from DB
-      const fresh = getCachedApartments({ neighborhood, beds, baths, minPrice, maxPrice });
+      const fresh = await getCachedApartments({ neighborhood, beds, baths, minPrice, maxPrice });
 
       send({
         type: "complete",
@@ -190,7 +233,7 @@ export async function POST(req: NextRequest) {
         total: fresh.apartments.length,
         fromCache: false,
         scrapedCount: allScraped.length,
-        cachedAt: now,
+        cachedAt: Math.floor(now.getTime() / 1000),
       });
       close();
     },

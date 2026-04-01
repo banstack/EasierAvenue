@@ -1,0 +1,54 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model Apartment {
+  id                  String   @id
+  title               String
+  price               String
+  price_num           BigInt?
+  address             String?
+  neighborhood        String?
+  url                 String
+  bedrooms            String?
+  bathrooms           String?
+  sqft                String?
+  sqft_num            BigInt?
+  image_url           String?
+  score               Float?
+  lat                 Float?
+  lng                 Float?
+  transit_score       Float?
+  net_effective_price BigInt?
+  months_free         Float?
+  lease_term          String?
+  price_reduction     BigInt?
+  first_seen_at       DateTime @default(now()) @db.Timestamptz
+  last_seen_at        DateTime @default(now()) @db.Timestamptz
+
+  @@index([neighborhood])
+  @@index([last_seen_at])
+  @@index([first_seen_at])
+
+  @@map("apartments")
+}
+
+model NeighborhoodStat {
+  neighborhood       String   @id
+  median_price       BigInt
+  avg_price_per_sqft Float?
+  updated_at         DateTime @default(now()) @db.Timestamptz
+
+  @@map("neighborhood_stats")
+}
+
+model ScrapeLock {
+  neighborhood String   @id
+  locked_at    DateTime @default(now()) @db.Timestamptz
+
+  @@map("scrape_locks")
+}
