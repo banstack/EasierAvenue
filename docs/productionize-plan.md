@@ -223,11 +223,12 @@ This means `route.ts` currently calls `getCachedApartments` synchronously. It'll
 ## Open Questions to Decide Together
 
 1. **ORM or raw SQL?** Raw `pg` keeps the existing code style and is minimal friction. Drizzle or Prisma adds type-safe migrations but more setup. Given the schema is simple and stable, raw `pg` is probably fine.
-
+A: If there's no additional setup from prisma let's use that
 2. **Connection pooling:** PgBouncer (Railway add-on) vs `pg.Pool` (built into the app). For a Next.js app on Railway, `pg.Pool` with a pool size of 5–10 is sufficient to start.
-
+A: Let's use Pg.pool
 3. **TTL duration:** 7 days proposed. Does that feel right? NYC listings move fast — a listing that's been sitting for a week might already be gone. Could argue for 3–4 days.
-
+A: Let's do 3 days instead
 4. **Data migration:** Do we care about migrating the existing ~1,000 SQLite rows to PostgreSQL, or do we start fresh and let the app re-scrape on demand?
-
+A: Let's start fresh no need to migrate data
 5. **`first_seen_at` in the UI:** The "New listing" indicator currently uses `days_on_market` from StreetEasy (which we can't reliably scrape). Should we show a "First seen X days ago" badge using `first_seen_at`? It's not the same thing but is available for free.
+A: We can fit this into a back log item, create a BACKLOG.md and fit this into there
