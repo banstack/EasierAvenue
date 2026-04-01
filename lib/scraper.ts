@@ -52,15 +52,22 @@ function randomUserAgent(): string {
   return USER_AGENTS[Math.floor(Math.random() * USER_AGENTS.length)];
 }
 
+function buildFetchUrl(url: string): string {
+  const apiKey = process.env.SCRAPER_API_KEY;
+  if (!apiKey) return url;
+  return `http://api.scraperapi.com?api_key=${apiKey}&url=${encodeURIComponent(url)}&render=false`;
+}
+
 async function fetchPage(url: string, maxRetries = 3): Promise<string> {
   for (let attempt = 0; attempt < maxRetries; attempt++) {
     if (attempt > 0) {
       await sleep(2000 + Math.random() * 2000);
     }
 
+    const fetchUrl = buildFetchUrl(url);
     const ua = randomUserAgent();
     const isChrome = ua.includes("Chrome") && !ua.includes("Edg");
-    const res = await fetch(url, {
+    const res = await fetch(fetchUrl, {
       headers: {
         "User-Agent": ua,
         Accept:
