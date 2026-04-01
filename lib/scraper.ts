@@ -34,18 +34,25 @@ const USER_AGENTS = [
 ];
 
 const DEFAULT_MAX_PAGES = 15;
-// Delay between page fetches (ms) — keeps us polite and avoids 403s
-const PAGE_DELAY_MS = 1500;
 
-function randomUserAgent(): string {
-  return USER_AGENTS[Math.floor(Math.random() * USER_AGENTS.length)];
-}
+// Minimum gap between any two outbound StreetEasy requests, globally across
+// all concurrent scrapes. Serializes all HTTP calls through a single chain so
+// no two requests ever fire simultaneously, regardless of how many neighborhood
+// scrapes are running in parallel.
+const MIN_REQUEST_INTERVAL_MS = 1500;
+
+let rateLimitChain: Promise<void> = Promise.resolve();
+let lastRequestAt = 0;
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-async function fetchWithRetry(url: string, maxRetries = 3): Promise<string> {
+function randomUserAgent(): string {
+  return USER_AGENTS[Math.floor(Math.random() * USER_AGENTS.length)];
+}
+
+async function fetchPage(url: string, maxRetries = 3): Promise<string> {
   for (let attempt = 0; attempt < maxRetries; attempt++) {
     if (attempt > 0) {
       await sleep(2000 + Math.random() * 2000);
@@ -72,6 +79,25 @@ async function fetchWithRetry(url: string, maxRetries = 3): Promise<string> {
   }
 
   throw new Error(`Failed to fetch ${url} after ${maxRetries} attempts`);
+}
+
+/**
+ * Rate-limited fetch — serializes all outbound StreetEasy requests through a
+ * single global queue, enforcing at least MIN_REQUEST_INTERVAL_MS between each
+ * request. Safe to call from multiple concurrent scrapes.
+ */
+function fetchWithRetry(url: string): Promise<string> {
+  const result = rateLimitChain.then(async () => {
+    const wait = Math.max(0, lastRequestAt + MIN_REQUEST_INTERVAL_MS - Date.now());
+    if (wait > 0) await sleep(wait);
+    lastRequestAt = Date.now();
+    return fetchPage(url);
+  });
+
+  // Advance the chain; swallow errors so a failed request doesn't stall the queue
+  rateLimitChain = result.then(() => {}, () => {});
+
+  return result;
 }
 
 /** Build a paginated StreetEasy URL. Page 1 has no query param. */
@@ -349,8 +375,6 @@ export async function scrapeListings(
 
   // --- Pages 2..N ---
   for (let pageNum = 2; pageNum <= totalPages; pageNum++) {
-    await sleep(PAGE_DELAY_MS + Math.random() * 500);
-
     let html: string;
     try {
       html = await fetchWithRetry(pageUrl(baseUrl, pageNum));
