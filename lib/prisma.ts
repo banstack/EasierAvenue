@@ -6,16 +6,12 @@ let _client: PrismaClient | undefined;
 function getClient(): PrismaClient {
   if (_client) return _client;
 
-  const privateUrl = process.env.DATABASE_PRIVATE_URL;
-  const publicUrl = process.env.DATABASE_URL;
-  const connectionString = privateUrl ?? publicUrl;
-
+  const connectionString = process.env.DATABASE_URL;
   if (!connectionString) {
-    throw new Error("Neither DATABASE_PRIVATE_URL nor DATABASE_URL is set");
+    throw new Error("DATABASE_URL is not set");
   }
 
-  const ssl = !privateUrl ? { rejectUnauthorized: false } : undefined;
-  const adapter = new PrismaPg({ connectionString, ssl });
+  const adapter = new PrismaPg({ connectionString, ssl: { rejectUnauthorized: false } });
   _client = new PrismaClient({ adapter });
   return _client;
 }
